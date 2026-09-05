@@ -1,0 +1,14 @@
+2026-09-04 21:14:38,362 - ERROR - 异常: name 'io' is not defined
+Traceback (most recent call last):
+  File "C:\Users\Administrator\Desktop\精料库\ui\main_window.py", line 234, in export_data
+    output = io.StringIO()
+             ^^
+NameError: name 'io' is not defined. Did you mean: 'id'? Or did you forget to import 'io'?
+
+2026-09-04 21:14:59,492 - ERROR - 异常: name 'io' is not defined
+Traceback (most recent call last):
+  File "C:\Users\Administrator\Desktop\精料库\ui\main_window.py", line 234, in export_data
+    output = io.StringIO()
+             ^^
+NameError: name 'io' is not defined. Did you mean: 'id'? Or did you forget to import 'io'?
+

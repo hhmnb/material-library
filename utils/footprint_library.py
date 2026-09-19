@@ -4,14 +4,10 @@
 不预置任何数据，数据全部来自数据库 footprints 表。
 """
 
-# 内置种子数据：留空。如果你想以后批量灌数据，把内容填进来即可。
 BUILTIN_FOOTPRINTS = []
 
 
-# ==================== 匹配打分 ====================
-
-def _normalize(s: str) -> str:
-    """统一小写 + 去空格 + 去常见分隔符，方便匹配"""
+def _normalize(s) -> str:
     if s is None:
         return ""
     return str(s).lower().replace(" ", "").replace("-", "").replace("_", "").replace(".", "")
@@ -28,6 +24,14 @@ def _score(fp: dict, keywords: list) -> int:
         tags = [t.strip() for t in tags.split(",") if t.strip()]
     tags_n = [_normalize(t) for t in tags]
 
+    # 关联 C 编号（如 C384887,C7519）
+    lcsc_ids = fp.get("lcsc_ids", "")
+    if isinstance(lcsc_ids, list):
+        lcsc_list = lcsc_ids
+    else:
+        lcsc_list = [t.strip() for t in str(lcsc_ids).split(",") if t.strip()]
+    lcsc_n = [_normalize(x) for x in lcsc_list]
+
     note_n = _normalize(fp.get("note", ""))
 
     score = 0
@@ -36,23 +40,33 @@ def _score(fp: dict, keywords: list) -> int:
         if not kw_n:
             continue
 
-        # 完整 tag 命中：最高优先级
+        # C 编号完全命中：最高优先
+        if kw_n in lcsc_n:
+            score += 200
+            continue
+
+        # 完整 tag 命中
         if kw_n in tags_n:
             score += 100
             continue
 
-        # name / display 完全等于：最高
+        # name / display 完全等于
         if kw_n == name_n or kw_n == display_n:
             score += 100
             continue
 
-        # tags 子串
+        # tag 子串
         for t in tags_n:
             if kw_n in t:
                 score += 40
                 break
 
-        # name / display 子串
+        # C 编号子串
+        for x in lcsc_n:
+            if kw_n in x:
+                score += 50
+                break
+
         if kw_n in name_n:
             score += 30
         if kw_n in display_n:

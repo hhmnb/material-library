@@ -23,71 +23,26 @@ def init_db():
 
     # ============ 元件主表 ============
     cursor.execute("""
-                   CREATE TABLE IF NOT EXISTS components
-                   (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       purpose
-                       TEXT
-                       NOT
-                       NULL,
-                       generic_desc
-                       TEXT
-                       NOT
-                       NULL,
-                       model
-                       TEXT
-                       NOT
-                       NULL,
-                       package
-                       TEXT,
-                       pin_count
-                       INTEGER,
-                       key_params
-                       TEXT,
-                       pin_notes
-                       TEXT,
-                       lcsc_id
-                       TEXT,
-                       buy_link
-                       TEXT,
-                       current_price
-                       REAL,
-                       supplier
-                       TEXT,
-                       status
-                       TEXT
-                       DEFAULT
-                       '未验证',
-                       created_at
-                       TEXT
-                       DEFAULT (
-                       datetime
-                   (
-                       'now',
-                       'localtime'
-                   )),
-                       updated_at TEXT DEFAULT
-                   (
-                       datetime
-                   (
-                       'now',
-                       'localtime'
-                   )),
-                       price_updated_at TEXT DEFAULT
-                   (
-                       datetime
-                   (
-                       'now',
-                       'localtime'
-                   ))
-                       )
-                   """)
+    CREATE TABLE IF NOT EXISTS components (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purpose TEXT NOT NULL,
+        generic_desc TEXT NOT NULL,
+        model TEXT NOT NULL,
+        package TEXT,
+        pin_count INTEGER,
+        key_params TEXT,
+        pin_notes TEXT,
+        lcsc_id TEXT,
+        buy_link TEXT,
+        current_price REAL,
+        supplier TEXT,
+        status TEXT DEFAULT '未验证',
+        created_at TEXT DEFAULT (datetime('now', 'localtime')),
+        updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+        price_updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    )
+    """)
 
-    # 兼容旧库：补 price_updated_at
     cursor.execute("PRAGMA table_info(components)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'price_updated_at' not in columns:
@@ -96,137 +51,61 @@ def init_db():
 
     # ============ 复习日志表 ============
     cursor.execute("""
-                   CREATE TABLE IF NOT EXISTS review_log
-                   (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       component_id
-                       INTEGER
-                       NOT
-                       NULL,
-                       reviewed_at
-                       TEXT,
-                       result
-                       TEXT,
-                       next_review_at
-                       TEXT,
-                       FOREIGN
-                       KEY
-                   (
-                       component_id
-                   ) REFERENCES components
-                   (
-                       id
-                   )
-                       )
-                   """)
+    CREATE TABLE IF NOT EXISTS review_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        component_id INTEGER NOT NULL,
+        reviewed_at TEXT,
+        result TEXT,
+        next_review_at TEXT,
+        FOREIGN KEY (component_id) REFERENCES components(id)
+    )
+    """)
 
     # ============ 价格历史表 ============
     cursor.execute("""
-                   CREATE TABLE IF NOT EXISTS price_history
-                   (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       component_id
-                       INTEGER
-                       NOT
-                       NULL,
-                       price
-                       REAL,
-                       supplier
-                       TEXT,
-                       recorded_at
-                       TEXT
-                       DEFAULT (
-                       datetime
-                   (
-                       'now',
-                       'localtime'
-                   )),
-                       FOREIGN KEY
-                   (
-                       component_id
-                   ) REFERENCES components
-                   (
-                       id
-                   )
-                       )
-                   """)
+    CREATE TABLE IF NOT EXISTS price_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        component_id INTEGER NOT NULL,
+        price REAL,
+        supplier TEXT,
+        recorded_at TEXT DEFAULT (datetime('now', 'localtime')),
+        FOREIGN KEY (component_id) REFERENCES components(id)
+    )
+    """)
 
     # ============ 供应商表 ============
     cursor.execute("""
-                   CREATE TABLE IF NOT EXISTS suppliers
-                   (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       name
-                       TEXT
-                       UNIQUE,
-                       rating
-                       INTEGER
-                       DEFAULT
-                       0,
-                       notes
-                       TEXT
-                   )
-                   """)
+    CREATE TABLE IF NOT EXISTS suppliers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE,
+        rating INTEGER DEFAULT 0,
+        notes TEXT
+    )
+    """)
 
     # ============ 封装库表 ============
     cursor.execute("""
-                   CREATE TABLE IF NOT EXISTS footprints
-                   (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       name
-                       TEXT
-                       NOT
-                       NULL
-                       UNIQUE,
-                       display
-                       TEXT,
-                       category
-                       TEXT,
-                       pins
-                       INTEGER
-                       DEFAULT
-                       0,
-                       tags
-                       TEXT,
-                       note
-                       TEXT,
-                       is_builtin
-                       INTEGER
-                       DEFAULT
-                       0,
-                       created_at
-                       TEXT
-                       DEFAULT (
-                       datetime
-                   (
-                       'now',
-                       'localtime'
-                   )),
-                       updated_at TEXT DEFAULT
-                   (
-                       datetime
-                   (
-                       'now',
-                       'localtime'
-                   ))
-                       )
-                   """)
+    CREATE TABLE IF NOT EXISTS footprints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        display TEXT,
+        category TEXT,
+        pins INTEGER DEFAULT 0,
+        tags TEXT,
+        note TEXT,
+        lcsc_ids TEXT,
+        is_builtin INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now', 'localtime')),
+        updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    )
+    """)
+
+    # 老库迁移：footprints 加 lcsc_ids 列
+    cursor.execute("PRAGMA table_info(footprints)")
+    fp_columns = [col[1] for col in cursor.fetchall()]
+    if 'lcsc_ids' not in fp_columns:
+        cursor.execute("ALTER TABLE footprints ADD COLUMN lcsc_ids TEXT")
+        print("✅ footprints 表已添加 lcsc_ids 列")
 
     # 首次启动导入内置封装（BUILTIN_FOOTPRINTS 为空则跳过）
     cursor.execute("SELECT COUNT(*) FROM footprints")
@@ -238,19 +117,22 @@ def init_db():
                     tags = fp.get("tags", [])
                     if isinstance(tags, list):
                         tags = ",".join(tags)
+                    lcsc_ids = fp.get("lcsc_ids", "")
+                    if isinstance(lcsc_ids, list):
+                        lcsc_ids = ",".join(lcsc_ids)
                     cursor.execute("""
-                                   INSERT
-                                   OR IGNORE INTO footprints
-                            (name, display, category, pins, tags, note, is_builtin)
-                            VALUES (?, ?, ?, ?, ?, ?, 1)
-                                   """, (
-                                       fp["name"],
-                                       fp.get("display", ""),
-                                       fp.get("category", ""),
-                                       fp.get("pins", 0),
-                                       tags,
-                                       fp.get("note", ""),
-                                   ))
+                        INSERT OR IGNORE INTO footprints
+                        (name, display, category, pins, tags, note, lcsc_ids, is_builtin)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                    """, (
+                        fp["name"],
+                        fp.get("display", ""),
+                        fp.get("category", ""),
+                        fp.get("pins", 0),
+                        tags,
+                        fp.get("note", ""),
+                        lcsc_ids,
+                    ))
                 print(f"✅ 已导入 {len(BUILTIN_FOOTPRINTS)} 条内置封装")
             else:
                 print("ℹ 未预置内置封装，请通过界面或 CSV 导入")

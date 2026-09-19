@@ -13,13 +13,13 @@ class FootprintEditDialog(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.footprint = footprint
-        self.result = False  # 是否保存成功
+        self.result = False
 
         self.title("编辑封装" if footprint else "添加封装")
-        self.geometry("520x420")
+        self.geometry("560x500")
         self.resizable(False, False)
 
-        theme = THEMES[parent.parent.current_theme] if hasattr(parent, "parent") else THEMES[parent.current_theme]
+        theme = THEMES[parent.current_theme]
         self.configure(bg=theme["bg_main"])
         style = ttk.Style(self)
         style.theme_use('clam')
@@ -38,17 +38,25 @@ class FootprintEditDialog(tk.Toplevel):
         body = ttk.Frame(self)
         body.pack(fill=tk.BOTH, expand=True, padx=15, pady=12)
 
-        self.vars = {
-            "name": tk.StringVar(value=(footprint or {}).get("name", "")),
-            "display": tk.StringVar(value=(footprint or {}).get("display", "")),
-            "category": tk.StringVar(value=(footprint or {}).get("category", "")),
-            "pins": tk.StringVar(value=str((footprint or {}).get("pins", 0) or "")),
-            "note": tk.StringVar(value=(footprint or {}).get("note", "")),
-        }
-        tags_val = (footprint or {}).get("tags", "")
+        fp = footprint or {}
+
+        tags_val = fp.get("tags", "")
         if isinstance(tags_val, list):
             tags_val = ",".join(tags_val)
-        self.vars["tags"] = tk.StringVar(value=tags_val or "")
+
+        lcsc_val = fp.get("lcsc_ids", "")
+        if isinstance(lcsc_val, list):
+            lcsc_val = ",".join(lcsc_val)
+
+        self.vars = {
+            "name": tk.StringVar(value=fp.get("name", "")),
+            "display": tk.StringVar(value=fp.get("display", "")),
+            "category": tk.StringVar(value=fp.get("category", "")),
+            "pins": tk.StringVar(value=str(fp.get("pins", 0) or "")),
+            "tags": tk.StringVar(value=tags_val or ""),
+            "lcsc_ids": tk.StringVar(value=lcsc_val or ""),
+            "note": tk.StringVar(value=fp.get("note", "")),
+        }
 
         rows = [
             ("封装名 *", "name", "例如 USB-C-SMD_16P"),
@@ -56,12 +64,13 @@ class FootprintEditDialog(tk.Toplevel):
             ("分类", "category", "例如 USB / 连接器 / 阻容"),
             ("引脚数", "pins", "0 表示不固定"),
             ("搜索关键词", "tags", "逗号分隔，例如 typec,type-c,c口,16p"),
+            ("关联 C 编号", "lcsc_ids", "逗号分隔，例如 C384887,C7519"),
             ("备注", "note", "任意说明"),
         ]
 
         for i, (label, key, hint) in enumerate(rows):
             ttk.Label(body, text=label).grid(row=i, column=0, sticky=tk.W, pady=6)
-            e = ttk.Entry(body, textvariable=self.vars[key], width=45)
+            e = ttk.Entry(body, textvariable=self.vars[key], width=48)
             e.grid(row=i, column=1, sticky=tk.EW, padx=(8, 0), pady=6)
             if key == "name":
                 e.focus_set()
@@ -86,6 +95,7 @@ class FootprintEditDialog(tk.Toplevel):
             "category": self.vars["category"].get().strip(),
             "pins": self.vars["pins"].get().strip() or 0,
             "tags": self.vars["tags"].get().strip(),
+            "lcsc_ids": self.vars["lcsc_ids"].get().strip(),
             "note": self.vars["note"].get().strip(),
         }
         if not data["name"]:

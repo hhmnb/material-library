@@ -24,8 +24,16 @@ class MainWindow(tk.Tk):
 
         self.current_components = []
 
+        # 页面状态
+        self.last_footprint_query = ""     # 记住上次封装搜索词
+        self.footprint_view = None         # 封装速查页面（懒加载）
+
+        # ===== 主界面容器 =====
+        self.main_view = ttk.Frame(self)
+        self.main_view.pack(fill=tk.BOTH, expand=True)
+
         # ===== 搜索区域 =====
-        search_frame = ttk.Frame(self)
+        search_frame = ttk.Frame(self.main_view)
         search_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
 
         ttk.Label(search_frame, text="搜索：").pack(side=tk.LEFT, padx=(0, 5))
@@ -45,7 +53,7 @@ class MainWindow(tk.Tk):
         theme_combo.bind("<<ComboboxSelected>>", self.on_theme_change)
 
         # ===== 表格区域 =====
-        table_frame = ttk.Frame(self)
+        table_frame = ttk.Frame(self.main_view)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         columns = ("purpose", "model", "package", "lcsc_id", "current_price", "buy_link", "status")
@@ -81,7 +89,7 @@ class MainWindow(tk.Tk):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # ===== 按钮区域 =====
-        button_frame = ttk.Frame(self)
+        button_frame = ttk.Frame(self.main_view)
         button_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
 
         ttk.Button(button_frame, text="添加元件", command=self.add_component).pack(side=tk.LEFT, padx=5)
@@ -95,6 +103,39 @@ class MainWindow(tk.Tk):
         ttk.Button(button_frame, text="刷新", command=self.refresh_table).pack(side=tk.LEFT, padx=5)
 
         self.apply_theme(self.current_theme)
+
+    # ==================== 页面切换 ====================
+    def show_main_view(self):
+        """切回主界面"""
+        if self.footprint_view is not None:
+            self.footprint_view.pack_forget()
+        self.main_view.pack(fill=tk.BOTH, expand=True)
+
+    def show_footprint_view(self):
+        """切到封装速查页面"""
+        self.main_view.pack_forget()
+        if self.footprint_view is None:
+            from ui.footprint_search_dialog import FootprintSearchView
+            self.footprint_view = FootprintSearchView(self)
+        self.footprint_view.pack(fill=tk.BOTH, expand=True)
+
+    def get_selected_component(self):
+        """取主界面当前选中的元件对象，给封装速查用"""
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        values = self.tree.item(sel[0], "values")
+        if len(values) < 4:
+            return None
+        lcsc_id = values[3]
+        model = values[1]
+        if lcsc_id:
+            comp = component_service.get_component_by_lcsc_id(lcsc_id)
+            if comp:
+                return comp
+        if model:
+            return component_service.get_component_by_model(model)
+        return None
 
     # ==================== 右键菜单 ====================
     def show_context_menu(self, event):
@@ -120,7 +161,6 @@ class MainWindow(tk.Tk):
             if not comp:
                 messagebox.showerror("错误", "未找到该元件")
                 return
-            # 使用自定义中文输入对话框
             dialog = SimpleInputDialog(
                 self,
                 title="修改购买链接",
@@ -177,13 +217,12 @@ class MainWindow(tk.Tk):
         else:
             messagebox.showwarning("提示", "数据不完整")
 
-    # ==================== 主题相关 ====================
+    # ==================== 弹窗入口 ====================
     def open_match_dialog(self):
         MatchDialog(self)
 
     def open_footprint_search(self):
-        from ui.footprint_search_dialog import FootprintSearchDialog
-        FootprintSearchDialog(self)
+        self.show_footprint_view()
 
     def open_batch_price_dialog(self):
         BatchPriceDialog(self)
@@ -233,6 +272,13 @@ class MainWindow(tk.Tk):
         selected_theme = self.theme_var.get()
         if selected_theme in THEMES:
             self.apply_theme(selected_theme)
+            # 如果封装页已经建过，重建以应用新主题
+            if self.footprint_view is not None:
+                was_visible = self.footprint_view.winfo_ismapped()
+                self.footprint_view.destroy()
+                self.footprint_view = None
+                if was_visible:
+                    self.show_footprint_view()
 
     # ==================== 数据操作 ====================
     def refresh_table(self):
@@ -323,7 +369,6 @@ class MainWindow(tk.Tk):
                 return
 
             if choice:
-                # 生成 CSV 文本
                 output = io.StringIO()
                 writer = csv.writer(output)
                 writer.writerow(["用途", "型号", "封装", "立创编号", "价格", "购买链接", "状态"])
@@ -332,7 +377,6 @@ class MainWindow(tk.Tk):
                                      comp.current_price, comp.buy_link, comp.status])
                 text = output.getvalue()
             else:
-                # 生成 JSON 文本
                 data = [comp.to_dict() for comp in components]
                 text = json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -362,9 +406,8 @@ class SimpleInputDialog(tk.Toplevel):
         super().__init__(parent)
         self.title(title)
         self.resizable(False, False)
-        self.result = None  # 存储用户输入的结果
+        self.result = None
 
-        # 应用当前主题
         theme = THEMES[parent.current_theme]
         self.configure(bg=theme["bg_main"])
         style = ttk.Style(self)
@@ -380,29 +423,24 @@ class SimpleInputDialog(tk.Toplevel):
                         foreground=theme["fg_text"],
                         insertcolor=theme["fg_text"])
 
-        # 提示文本
         if prompt:
             ttk.Label(self, text=prompt, justify=tk.LEFT).pack(padx=10, pady=(10, 5))
 
-        # 输入框
         self.entry_var = tk.StringVar(value=initial_value)
         entry = ttk.Entry(self, textvariable=self.entry_var, width=40)
         entry.pack(padx=10, pady=5)
         entry.focus_set()
 
-        # 按钮
         btn_frame = ttk.Frame(self)
         btn_frame.pack(pady=10)
         ttk.Button(btn_frame, text="确定", command=self._on_ok).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="取消", command=self._on_cancel).pack(side=tk.LEFT, padx=5)
 
-        # 居中显示
         self.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
         y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{x}+{y}")
 
-        # 模态等待
         self.transient(parent)
         self.grab_set()
 
@@ -508,7 +546,6 @@ class TextInputDialog(tk.Toplevel):
         messagebox.showinfo("提示", "输入规则已复制到剪贴板，可粘贴给AI生成符合格式的文本")
 
     def _parse_and_validate_block(self, block: str) -> dict:
-        """解析单个文本块，返回字段字典。若格式错误或必填缺失则抛出异常。"""
         errors = self.validate_text_format(block)
         if errors:
             raise ValueError("格式错误：\n" + "\n".join(errors))
@@ -552,7 +589,6 @@ class TextInputDialog(tk.Toplevel):
         return data
 
     def _check_duplicate(self, data: dict):
-        """检查重复，若重复则抛出异常"""
         existing = None
         lcsc_id = data.get("lcsc_id", "").strip()
         model = data.get("model", "").strip()
@@ -564,29 +600,23 @@ class TextInputDialog(tk.Toplevel):
             raise ValueError(f"重复：元件已存在 {existing.model} (立创编号: {existing.lcsc_id})")
 
     def _save_single_block(self, block: str):
-        """处理单个文本块的添加或更新，成功无异常，失败抛异常"""
         data = self._parse_and_validate_block(block)
 
         if self.component is None:
-            # 添加模式
             self._check_duplicate(data)
             comp = Component(**data)
             component_service.add_component(comp)
         else:
-            # 编辑模式
             component_service.update_component(self.component.id, **data)
 
     def save(self):
         raw_text = self.text.get("1.0", tk.END).strip()
-        # 按空行分割成块
         blocks = [b.strip() for b in raw_text.split('\n\n') if b.strip()]
 
-        # 如果是编辑模式，只允许一个块
         if self.component is not None and len(blocks) > 1:
             messagebox.showerror("错误", "编辑模式下只允许一个元件")
             return
 
-        # 批量添加模式（仅添加模式）
         if len(blocks) > 1:
             success_count = 0
             failures = []
@@ -605,7 +635,6 @@ class TextInputDialog(tk.Toplevel):
             self.destroy()
             return
 
-        # 单个添加或编辑
         try:
             self._save_single_block(raw_text)
             self.parent.refresh_table()
@@ -756,9 +785,8 @@ SL2.1A 2.3
 """
         ttk.Label(self, text=rule_text, justify=tk.LEFT).pack(padx=10, pady=(10, 5))
 
-        # 最大处理行数输入
         limit_frame = ttk.Frame(self)
-        limit_frame.pack(fill=tk.X, padx=10, pady=(0,5))
+        limit_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
         ttk.Label(limit_frame, text="最大处理行数（留空不限制）:").pack(side=tk.LEFT)
         self.limit_var = tk.StringVar()
         ttk.Entry(limit_frame, textvariable=self.limit_var, width=10).pack(side=tk.LEFT, padx=5)

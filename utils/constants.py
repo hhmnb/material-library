@@ -3,10 +3,13 @@
 所有可变参数集中在这里，修改时只需要改这一个文件。
 """
 
+import os
+
 # ================= 数据库 =================
-DATABASE_DIR = "data"
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATABASE_DIR = os.path.join(_BASE_DIR, "data")
 DATABASE_FILENAME = "components.db"
-DATABASE_PATH = f"{DATABASE_DIR}/{DATABASE_FILENAME}"
+DATABASE_PATH = os.path.join(DATABASE_DIR, DATABASE_FILENAME)
 
 # ================= 元件状态 =================
 STATUS_UNVERIFIED = "未验证"

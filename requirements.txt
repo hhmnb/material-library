@@ -1,0 +1,12 @@
+# 本项目目前只用 Python 标准库，不需要安装任何第三方包。
+#
+# 标准库清单（仅供阅读，不需要 pip 安装）：
+#   tkinter    - GUI（Windows 官方 Python 自带）
+#   sqlite3    - 数据库
+#   csv, json  - 导入导出
+#   dataclasses, typing - 数据模型
+#   webbrowser - 打开购买链接
+#
+# 如果以后接入以下功能，再取消对应注释：
+# easyeda2kicad>=0.7.0    # 按 LCSC 编号导出 KiCad 符号/封装
+# requests>=2.31.0        # 访问立创商城/嘉立创 API

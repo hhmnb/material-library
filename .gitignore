@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+.idea/
+
+# 数据库（含备份）
+data/*.db
+data/*.db.bak
+database/data/*.db
+database/data/*.db.bak
+database/data/*.db.old
+
+# 日志和缓存
+error.log
+ui/error.log
+utils/error.log
+.ai_ref_cache.json

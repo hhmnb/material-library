@@ -87,6 +87,7 @@ class MainWindow(tk.Tk):
         ttk.Button(button_frame, text="添加元件", command=self.add_component).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="编辑选中", command=self.edit_component).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="删除选中", command=self.delete_component).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="封装速查", command=self.open_footprint_search).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="参数匹配", command=self.open_match_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="批量更新价格", command=self.open_batch_price_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="导出数据", command=self.export_data).pack(side=tk.LEFT, padx=5)
@@ -179,6 +180,10 @@ class MainWindow(tk.Tk):
     # ==================== 主题相关 ====================
     def open_match_dialog(self):
         MatchDialog(self)
+
+    def open_footprint_search(self):
+        from ui.footprint_search_dialog import FootprintSearchDialog
+        FootprintSearchDialog(self)
 
     def open_batch_price_dialog(self):
         BatchPriceDialog(self)

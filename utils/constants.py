@@ -90,6 +90,7 @@ THEMES = {
         "fg_text": "#e0e0ea",
         "fg_white": "#ffffff",
         "border": "#3a3a4e",
+        "bg_table_alt": "#252526",   # 比 bg_table 略亮或略暗一档
     },
     "纯黑": {
         "bg_main": "#0d0d0d",
@@ -102,6 +103,7 @@ THEMES = {
         "fg_text": "#e8e8e8",
         "fg_white": "#ffffff",
         "border": "#333333",
+        "bg_table_alt": "#252526",   # 比 bg_table 略亮或略暗一档
     },
     "浅色": {
         "bg_main": "#f0f0f0",
@@ -114,6 +116,7 @@ THEMES = {
         "fg_text": "#000000",
         "fg_white": "#000000",
         "border": "#b0b0b0",
+        "bg_table_alt": "#252526",   # 比 bg_table 略亮或略暗一档
     },
 }
 

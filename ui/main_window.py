@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import webbrowser
@@ -6,27 +7,62 @@ import csv
 import json
 import io
 from services import component_service
+from services import project_service
 from models.component import Component
 from utils.constants import THEMES, DEFAULT_THEME
 from utils.error_handler import safe_call, log_error
+from ui.wrapped_table import WrappedTable
+
+
+def format_specs(comp) -> str:
+    """把电压/电流/功率合并为多行字符串，供表格'规格'列使用。"""
+    parts = []
+    if getattr(comp, "voltage", ""):
+        parts.append(f"V: {comp.voltage}")
+    if getattr(comp, "current", ""):
+        parts.append(f"I: {comp.current}")
+    if getattr(comp, "power", ""):
+        parts.append(f"P: {comp.power}")
+    return "\n".join(parts)
+
+
+def _strip_ai_wrappers(text: str) -> str:
+    """
+    清洗 AI 回复里常见的外包装，让文本能直接被软件解析：
+    - 去掉 markdown 代码块 ```xxx ... ```
+    - 去掉行首的列表符号 - • * ·
+    - 去掉行首的序号 1. 2. 3.
+    - 去掉首尾多余空行
+    """
+    if not text:
+        return ""
+    import re as _re
+    text = text.replace("```", "")
+    lines = []
+    for line in text.splitlines():
+        line = _re.sub(r"^\s*[-•*·]\s+", "", line)
+        line = _re.sub(r"^\s*\d+\.\s+", "", line)
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
 
 
 class MainWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("精料库 - 元件库管理系统")
-        self.geometry("1100x500")
-        self.minsize(800, 400)
+        self.geometry("1360x560")
+        self.minsize(1000, 400)
 
         self.current_theme = DEFAULT_THEME
         self.style = ttk.Style(self)
         self.style.theme_use('clam')
 
         self.current_components = []
+        self.current_project = None       # 当前选中的项目 dict（None 表示"全部"）
 
         # 页面状态
-        self.last_footprint_query = ""     # 记住上次封装搜索词
-        self.footprint_view = None         # 封装速查页面（懒加载）
+        self.last_footprint_query = ""
+        self.footprint_view = None
 
         # ===== 主界面容器 =====
         self.main_view = ttk.Frame(self)
@@ -38,55 +74,68 @@ class MainWindow(tk.Tk):
 
         ttk.Label(search_frame, text="搜索：").pack(side=tk.LEFT, padx=(0, 5))
         self.search_var = tk.StringVar()
-        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=24)
         search_entry.pack(side=tk.LEFT, padx=5)
+        search_entry.bind("<Return>", lambda e: self.refresh_table())
 
-        ttk.Button(search_frame, text="查询", command=self.refresh_table).pack(side=tk.LEFT, padx=5)
-        ttk.Button(search_frame, text="显示全部", command=self.show_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(search_frame, text="查询", command=self.refresh_table).pack(side=tk.LEFT, padx=3)
+        ttk.Button(search_frame, text="显示全部", command=self.show_all).pack(side=tk.LEFT, padx=3)
 
-        # 主题切换下拉框
-        ttk.Label(search_frame, text="主题：").pack(side=tk.LEFT, padx=(20, 5))
+        # 项目筛选（可手输模糊匹配）
+        ttk.Label(search_frame, text="项目：").pack(side=tk.LEFT, padx=(15, 3))
+        self.project_var = tk.StringVar(value="[全部]")
+        self.project_combo = ttk.Combobox(
+            search_frame, textvariable=self.project_var,
+            values=["[全部]"], state="normal", width=14,
+        )
+        self.project_combo.pack(side=tk.LEFT, padx=3)
+        self.project_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_table())
+        self.project_combo.bind("<Return>", lambda e: self.refresh_table())
+        self.project_combo.bind("<KeyRelease>", self._on_project_keyrelease)
+
+        ttk.Button(search_frame, text="管理项目", command=self.open_project_manager).pack(
+            side=tk.LEFT, padx=3
+        )
+
+        # 主题切换
+        ttk.Label(search_frame, text="主题：").pack(side=tk.LEFT, padx=(15, 3))
         self.theme_var = tk.StringVar(value=self.current_theme)
         theme_combo = ttk.Combobox(search_frame, textvariable=self.theme_var,
-                                   values=list(THEMES.keys()), state="readonly", width=12)
-        theme_combo.pack(side=tk.LEFT, padx=5)
+                                   values=list(THEMES.keys()), state="readonly", width=10)
+        theme_combo.pack(side=tk.LEFT, padx=3)
         theme_combo.bind("<<ComboboxSelected>>", self.on_theme_change)
 
         # ===== 表格区域 =====
         table_frame = ttk.Frame(self.main_view)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        columns = ("purpose", "model", "package", "lcsc_id", "current_price", "buy_link", "status")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings")
+        columns = [
+            {"key": "purpose",       "text": "用途",     "width": 110},
+            {"key": "model",         "text": "型号",     "width": 140},
+            {"key": "package",       "text": "封装",     "width": 110},
+            {"key": "lcsc_id",       "text": "立创编号", "width": 100},
+            {"key": "specs",         "text": "规格",     "width": 170},
+            {"key": "current_price", "text": "价格",     "width": 70},
+            {"key": "buy_link",      "text": "购买链接", "width": 220},
+            {"key": "status",        "text": "状态",     "width": 80},
+        ]
+        self.tbl = WrappedTable(
+            table_frame, columns, THEMES[self.current_theme],
+            on_select=self._on_row_select,
+            on_double_click=self._on_row_double_click,
+            on_right_click=self._on_row_right_click,
+        )
+        self.tbl.pack(fill=tk.BOTH, expand=True)
 
-        self.tree.heading("purpose", text="用途")
-        self.tree.heading("model", text="型号")
-        self.tree.heading("package", text="封装")
-        self.tree.heading("lcsc_id", text="立创编号")
-        self.tree.heading("current_price", text="价格")
-        self.tree.heading("buy_link", text="购买链接")
-        self.tree.heading("status", text="状态")
-
-        self.tree.column("purpose", width=100)
-        self.tree.column("model", width=120)
-        self.tree.column("package", width=80)
-        self.tree.column("lcsc_id", width=100)
-        self.tree.column("current_price", width=60)
-        self.tree.column("buy_link", width=250)
-        self.tree.column("status", width=60)
-
-        self.tree.bind("<Double-1>", self.on_tree_double_click)
-
-        # 创建右键菜单
+        # 右键菜单
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="修改购买链接", command=self.edit_buy_link)
         self.context_menu.add_command(label="修改价格", command=self.edit_price)
-        self.tree.bind("<Button-3>", self.show_context_menu)
-
-        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="加入项目…", command=self.add_to_project)
+        self.context_menu.add_command(label="从当前项目移除…", command=self.remove_from_project)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="批量加入项目…", command=self.batch_add_to_project)
 
         # ===== 按钮区域 =====
         button_frame = ttk.Frame(self.main_view)
@@ -98,21 +147,24 @@ class MainWindow(tk.Tk):
         ttk.Button(button_frame, text="封装速查", command=self.open_footprint_search).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="参数匹配", command=self.open_match_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="批量更新价格", command=self.open_batch_price_dialog).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="批量加入项目", command=self.batch_add_to_project).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="导出数据", command=self.export_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="AI 提示词", command=self.copy_ai_prompt).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="价格校准", command=self.show_price_outdated).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="刷新", command=self.refresh_table).pack(side=tk.LEFT, padx=5)
+
+        # 初始化项目下拉
+        self.refresh_project_combo()
 
         self.apply_theme(self.current_theme)
 
     # ==================== 页面切换 ====================
     def show_main_view(self):
-        """切回主界面"""
         if self.footprint_view is not None:
             self.footprint_view.pack_forget()
         self.main_view.pack(fill=tk.BOTH, expand=True)
 
     def show_footprint_view(self):
-        """切到封装速查页面"""
         self.main_view.pack_forget()
         if self.footprint_view is None:
             from ui.footprint_search_dialog import FootprintSearchView
@@ -120,102 +172,202 @@ class MainWindow(tk.Tk):
         self.footprint_view.pack(fill=tk.BOTH, expand=True)
 
     def get_selected_component(self):
-        """取主界面当前选中的元件对象，给封装速查用"""
-        sel = self.tree.selection()
-        if not sel:
+        row = self.tbl.get_selected()
+        if not row:
             return None
-        values = self.tree.item(sel[0], "values")
-        if len(values) < 4:
+        return row.get("_obj")
+
+    # ==================== 项目下拉 ====================
+    def refresh_project_combo(self):
+        """从库里拉取所有项目名，刷新下拉框（保留当前选中文字）"""
+        current = self.project_var.get()
+        try:
+            projects = project_service.list_all_projects()
+        except Exception:
+            projects = []
+        names = [p["name"] for p in projects]
+        options = ["[全部]"] + names
+        self.project_combo["values"] = options
+        # 如果当前不是 [全部] 也不在列表里（例如新输入），保留输入内容
+
+    def _on_project_keyrelease(self, event):
+        """输入时动态过滤下拉候选，实现模糊快速匹配"""
+        if event.keysym in ("Return", "Tab", "Escape", "Up", "Down", "Left", "Right"):
+            return
+        typed = self.project_var.get().strip()
+        if not typed or typed == "[全部]":
+            # 全部列出
+            try:
+                projects = project_service.list_all_projects()
+            except Exception:
+                projects = []
+            self.project_combo["values"] = ["[全部]"] + [p["name"] for p in projects]
+            return
+
+        try:
+            projects = project_service.list_all_projects()
+        except Exception:
+            projects = []
+        names = [p["name"] for p in projects]
+        low = typed.lower()
+        matched = [n for n in names if low in n.lower()]
+        if matched:
+            self.project_combo["values"] = ["[全部]"] + matched
+        else:
+            # 没匹配到就显示全部，同时保留用户输入
+            self.project_combo["values"] = ["[全部]"] + names
+
+    def _resolve_current_project(self):
+        """
+        把当前项目下拉框的输入解析为项目 dict：
+        - 空 / "[全部]" → None
+        - 精确匹配 → dict
+        - 模糊匹配（取第一个包含的） → dict
+        - 都匹配不到 → None
+        """
+        name = self.project_var.get().strip()
+        if not name or name == "[全部]":
             return None
-        lcsc_id = values[3]
-        model = values[1]
-        if lcsc_id:
-            comp = component_service.get_component_by_lcsc_id(lcsc_id)
-            if comp:
-                return comp
-        if model:
-            return component_service.get_component_by_model(model)
+        proj = project_service.get_project_by_name(name)
+        if proj:
+            return proj
+        # 模糊匹配
+        try:
+            projects = project_service.list_all_projects()
+        except Exception:
+            projects = []
+        low = name.lower()
+        for p in projects:
+            if low in p["name"].lower():
+                # 同步下拉框文字为匹配到的完整名字
+                self.project_var.set(p["name"])
+                return p
         return None
 
-    # ==================== 右键菜单 ====================
-    def show_context_menu(self, event):
-        """右键时自动选中鼠标所在行，并弹出菜单"""
-        row_id = self.tree.identify_row(event.y)
-        if row_id:
-            self.tree.selection_set(row_id)
-        selected = self.tree.selection()
-        if not selected:
-            return
+    def open_project_manager(self):
+        from ui.project_manager_dialog import ProjectManagerDialog
+        dlg = ProjectManagerDialog(self)
+        self.wait_window(dlg)
+        self.refresh_project_combo()
+        self.refresh_table()
+
+    # ==================== WrappedTable 回调 ====================
+    def _on_row_select(self, row_data, row_index):
+        pass
+
+    def _on_row_double_click(self, row_data, row_index):
+        link = row_data.get("buy_link", "") or ""
+        if link.strip():
+            webbrowser.open(link.strip())
+
+    def _on_row_right_click(self, event, row_data, row_index):
+        # 根据是否处于项目视图，控制"从项目移除"是否可用
+        if self.current_project is None:
+            self.context_menu.entryconfigure("从当前项目移除…", state="disabled")
+        else:
+            self.context_menu.entryconfigure("从当前项目移除…", state="normal")
         self.context_menu.post(event.x_root, event.y_root)
 
+    # ==================== 右键菜单动作 ====================
     def edit_buy_link(self):
-        """快速修改选中元件的购买链接"""
-        selected = self.tree.selection()
-        if not selected:
+        row = self.tbl.get_selected()
+        if not row:
             messagebox.showwarning("提示", "请先选中一行")
             return
-        values = self.tree.item(selected[0], "values")
-        if len(values) > 5:
-            lcsc_id = values[3]
-            comp = component_service.get_component_by_lcsc_id(lcsc_id)
-            if not comp:
-                messagebox.showerror("错误", "未找到该元件")
-                return
-            dialog = SimpleInputDialog(
-                self,
-                title="修改购买链接",
-                prompt=f"元件：{comp.model}\n请输入新的购买链接：",
-                initial_value=comp.buy_link
-            )
-            self.wait_window(dialog)
-            new_link = dialog.result
-            if new_link is not None:
-                try:
-                    component_service.update_component(comp.id, buy_link=new_link.strip())
-                    self.refresh_table()
-                    messagebox.showinfo("成功", "购买链接已更新")
-                except Exception as e:
-                    log_error(e)
-                    messagebox.showerror("更新失败", f"更新购买链接时出错：{e}")
-        else:
-            messagebox.showwarning("提示", "数据不完整")
+        comp = row.get("_obj")
+        if comp is None:
+            messagebox.showerror("错误", "未找到该元件")
+            return
+        dialog = SimpleInputDialog(
+            self,
+            title="修改购买链接",
+            prompt=f"元件：{comp.model}\n请输入新的购买链接：",
+            initial_value=comp.buy_link
+        )
+        self.wait_window(dialog)
+        new_link = dialog.result
+        if new_link is not None:
+            try:
+                component_service.update_component(comp.id, buy_link=new_link.strip())
+                self.refresh_table()
+                messagebox.showinfo("成功", "购买链接已更新")
+            except Exception as e:
+                log_error(e)
+                messagebox.showerror("更新失败", f"更新购买链接时出错：{e}")
 
     def edit_price(self):
-        """快速修改选中元件的价格"""
-        selected = self.tree.selection()
-        if not selected:
+        row = self.tbl.get_selected()
+        if not row:
             messagebox.showwarning("提示", "请先选中一行")
             return
-        values = self.tree.item(selected[0], "values")
-        if len(values) > 3:
-            lcsc_id = values[3]
-            comp = component_service.get_component_by_lcsc_id(lcsc_id)
-            if not comp:
-                messagebox.showerror("错误", "未找到该元件")
-                return
-            dialog = SimpleInputDialog(
-                self,
-                title="修改价格",
-                prompt=f"元件：{comp.model}\n请输入新的价格：",
-                initial_value=str(comp.current_price) if comp.current_price else ""
-            )
-            self.wait_window(dialog)
-            new_price_str = dialog.result
-            if new_price_str is not None:
-                try:
-                    price = float(new_price_str.strip())
-                    if price < 0:
-                        raise ValueError
-                    component_service.update_component(comp.id, current_price=price)
-                    self.refresh_table()
-                    messagebox.showinfo("成功", "价格已更新")
-                except ValueError:
-                    messagebox.showerror("错误", "请输入有效的正数价格")
-                except Exception as e:
-                    log_error(e)
-                    messagebox.showerror("更新失败", f"更新价格时出错：{e}")
-        else:
-            messagebox.showwarning("提示", "数据不完整")
+        comp = row.get("_obj")
+        if comp is None:
+            messagebox.showerror("错误", "未找到该元件")
+            return
+        dialog = SimpleInputDialog(
+            self,
+            title="修改价格",
+            prompt=f"元件：{comp.model}\n请输入新的价格：",
+            initial_value=str(comp.current_price) if comp.current_price else ""
+        )
+        self.wait_window(dialog)
+        new_price_str = dialog.result
+        if new_price_str is not None:
+            try:
+                price = float(new_price_str.strip())
+                if price < 0:
+                    raise ValueError
+                component_service.update_component(comp.id, current_price=price)
+                self.refresh_table()
+                messagebox.showinfo("成功", "价格已更新")
+            except ValueError:
+                messagebox.showerror("错误", "请输入有效的正数价格")
+            except Exception as e:
+                log_error(e)
+                messagebox.showerror("更新失败", f"更新价格时出错：{e}")
+
+    def add_to_project(self):
+        row = self.tbl.get_selected()
+        if not row:
+            messagebox.showwarning("提示", "请先选中一行")
+            return
+        comp = row.get("_obj")
+        if comp is None:
+            messagebox.showerror("错误", "未找到该元件")
+            return
+        from ui.project_manager_dialog import AddToProjectDialog
+        dlg = AddToProjectDialog(self, comp)
+        self.wait_window(dlg)
+        if dlg.result:
+            self.refresh_project_combo()
+            self.refresh_table()
+
+    def remove_from_project(self):
+        if self.current_project is None:
+            messagebox.showwarning("提示", "当前是「全部」视图，请先在项目下拉里选中一个具体项目")
+            return
+        row = self.tbl.get_selected()
+        if not row:
+            messagebox.showwarning("提示", "请先选中一行")
+            return
+        comp = row.get("_obj")
+        if comp is None:
+            messagebox.showerror("错误", "未找到该元件")
+            return
+        from ui.project_manager_dialog import RemoveFromProjectDialog
+        dlg = RemoveFromProjectDialog(self, self.current_project, comp)
+        self.wait_window(dlg)
+        if dlg.result:
+            self.refresh_table()
+
+    def batch_add_to_project(self):
+        """打开文本批量加入项目对话框（不依赖当前列表内容）"""
+        from ui.project_manager_dialog import BatchAddToProjectDialog
+        dlg = BatchAddToProjectDialog(self)
+        self.wait_window(dlg)
+        if dlg.result:
+            self.refresh_project_combo()
+            self.refresh_table()
 
     # ==================== 弹窗入口 ====================
     def open_match_dialog(self):
@@ -227,16 +379,7 @@ class MainWindow(tk.Tk):
     def open_batch_price_dialog(self):
         BatchPriceDialog(self)
 
-    def on_tree_double_click(self, event):
-        selected = self.tree.selection()
-        if not selected:
-            return
-        values = self.tree.item(selected[0], "values")
-        if len(values) > 5:
-            link = values[5]
-            if link and link.strip():
-                webbrowser.open(link)
-
+    # ==================== 主题 ====================
     def apply_theme(self, theme_name):
         theme = THEMES[theme_name]
         self.current_theme = theme_name
@@ -248,6 +391,16 @@ class MainWindow(tk.Tk):
         self.style.map('TButton',
                        background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
                        foreground=[('active', theme["fg_white"])])
+        self.style.configure('TEntry',
+                             fieldbackground=theme["bg_input"],
+                             foreground=theme["fg_text"],
+                             insertcolor=theme["fg_text"])
+        self.style.configure('TCombobox',
+                             fieldbackground=theme["bg_input"],
+                             foreground=theme["fg_text"],
+                             background=theme["bg_button"])
+
+        # 封装速查页仍在用 Treeview
         self.style.configure('Treeview',
                              background=theme["bg_table"],
                              foreground=theme["fg_text"],
@@ -262,17 +415,31 @@ class MainWindow(tk.Tk):
         self.style.map('Treeview',
                        background=[('selected', theme["bg_select"])],
                        foreground=[('selected', theme["fg_white"])])
-        self.style.configure('TEntry',
-                             fieldbackground=theme["bg_input"],
-                             foreground=theme["fg_text"],
-                             insertcolor=theme["fg_text"])
+
+        if hasattr(self, "tbl") and self.tbl is not None:
+            self.tbl.update_theme(theme)
+
+        self._apply_treeview_zebra(theme)
+
         self.refresh_table()
+
+    def _apply_treeview_zebra(self, theme):
+        if self.footprint_view is None:
+            return
+        tree = getattr(self.footprint_view, "tree", None)
+        if tree is None:
+            return
+        even = theme.get("bg_table", "#1e1e1e")
+        odd = theme.get("bg_table_alt", "#252526")
+        tree.tag_configure("row_even", background=even, foreground=theme["fg_text"])
+        tree.tag_configure("row_odd", background=odd, foreground=theme["fg_text"])
+        for i, iid in enumerate(tree.get_children()):
+            tree.item(iid, tags=("row_even" if i % 2 == 0 else "row_odd",))
 
     def on_theme_change(self, event=None):
         selected_theme = self.theme_var.get()
         if selected_theme in THEMES:
             self.apply_theme(selected_theme)
-            # 如果封装页已经建过，重建以应用新主题
             if self.footprint_view is not None:
                 was_visible = self.footprint_view.winfo_ismapped()
                 self.footprint_view.destroy()
@@ -281,81 +448,103 @@ class MainWindow(tk.Tk):
                     self.show_footprint_view()
 
     # ==================== 数据操作 ====================
-    def refresh_table(self):
-        for i in self.tree.get_children():
-            self.tree.delete(i)
-        keyword = self.search_var.get().strip()
-        if keyword:
-            components = component_service.search_components_multi(keyword)
-        else:
-            components = component_service.list_all_components()
-        self.current_components = components
+    def _components_to_rows(self, components):
+        rows = []
         for comp in components:
-            self.tree.insert("", tk.END, values=(
-                comp.purpose,
-                comp.model,
-                comp.package,
-                comp.lcsc_id,
-                comp.current_price,
-                comp.buy_link,
-                comp.status
-            ))
+            # components 可能是 Component 对象，也可能是 dict（项目视图返回的是 dict）
+            if isinstance(comp, dict):
+                voltage = comp.get("voltage", "")
+                current = comp.get("current", "")
+                power = comp.get("power", "")
+                specs_parts = []
+                if voltage:
+                    specs_parts.append(f"V: {voltage}")
+                if current:
+                    specs_parts.append(f"I: {current}")
+                if power:
+                    specs_parts.append(f"P: {power}")
+                specs = "\n".join(specs_parts)
+                rows.append({
+                    "purpose": comp.get("purpose", ""),
+                    "model": comp.get("model", ""),
+                    "package": comp.get("package", ""),
+                    "lcsc_id": comp.get("lcsc_id", ""),
+                    "specs": specs,
+                    "current_price": comp.get("current_price", 0.0),
+                    "buy_link": comp.get("buy_link", ""),
+                    "status": comp.get("status", ""),
+                    "_obj": Component.from_dict({k: v for k, v in comp.items()
+                                                 if k in Component.__dataclass_fields__}),
+                })
+            else:
+                rows.append({
+                    "purpose": comp.purpose,
+                    "model": comp.model,
+                    "package": comp.package,
+                    "lcsc_id": comp.lcsc_id,
+                    "specs": format_specs(comp),
+                    "current_price": comp.current_price,
+                    "buy_link": comp.buy_link,
+                    "status": comp.status,
+                    "_obj": comp,
+                })
+        return rows
+
+    def refresh_table(self):
+        keyword = self.search_var.get().strip()
+        project = self._resolve_current_project()
+        self.current_project = project
+
+        project_id = project["id"] if project else None
+
+        try:
+            data = project_service.search_components_in_project(project_id, keyword)
+        except Exception as e:
+            log_error(e)
+            messagebox.showerror("错误", f"查询失败：{e}")
+            data = []
+
+        self.current_components = data
+        self.tbl.set_data(self._components_to_rows(data))
+        # 刷新项目下拉（顺便把新项目列出来）
+        self.refresh_project_combo()
 
     def display_components(self, components):
+        """给参数匹配对话框用：直接显示一批 Component"""
         self.current_components = components
-        for i in self.tree.get_children():
-            self.tree.delete(i)
-        for comp in components:
-            self.tree.insert("", tk.END, values=(
-                comp.purpose,
-                comp.model,
-                comp.package,
-                comp.lcsc_id,
-                comp.current_price,
-                comp.buy_link,
-                comp.status
-            ))
+        self.tbl.set_data(self._components_to_rows(components))
 
     def show_all(self):
         self.search_var.set("")
+        self.project_var.set("[全部]")
         self.refresh_table()
 
     def add_component(self):
         TextInputDialog(self, None)
 
     def edit_component(self):
-        selected = self.tree.selection()
-        if not selected:
+        row = self.tbl.get_selected()
+        if not row:
             messagebox.showwarning("提示", "请先选中一行")
             return
-        values = self.tree.item(selected[0], "values")
-        if len(values) > 3:
-            lcsc_id = values[3]
-            comp = component_service.get_component_by_lcsc_id(lcsc_id)
-            if comp:
-                TextInputDialog(self, comp)
-            else:
-                messagebox.showerror("错误", "未找到该元件")
-        else:
-            messagebox.showwarning("提示", "数据不完整")
+        comp = row.get("_obj")
+        if comp is None:
+            messagebox.showerror("错误", "未找到该元件")
+            return
+        TextInputDialog(self, comp)
 
     def delete_component(self):
-        selected = self.tree.selection()
-        if not selected:
+        row = self.tbl.get_selected()
+        if not row:
             messagebox.showwarning("提示", "请先选中一行")
             return
-        values = self.tree.item(selected[0], "values")
-        if len(values) > 3:
-            lcsc_id = values[3]
-            comp = component_service.get_component_by_lcsc_id(lcsc_id)
-            if comp:
-                if messagebox.askyesno("确认", f"确定要删除 {comp.model} 吗？"):
-                    component_service.delete_component(comp.id)
-                    self.refresh_table()
-            else:
-                messagebox.showerror("错误", "未找到该元件")
-        else:
-            messagebox.showwarning("提示", "数据不完整")
+        comp = row.get("_obj")
+        if comp is None:
+            messagebox.showerror("错误", "未找到该元件")
+            return
+        if messagebox.askyesno("确认", f"确定要删除 {comp.model} 吗？\n\n删除后所有项目里的这条关联也会被清除。"):
+            component_service.delete_component(comp.id)
+            self.refresh_table()
 
     # ==================== 导出数据（复制到剪贴板） ====================
     def export_data(self):
@@ -371,9 +560,12 @@ class MainWindow(tk.Tk):
             if choice:
                 output = io.StringIO()
                 writer = csv.writer(output)
-                writer.writerow(["用途", "型号", "封装", "立创编号", "价格", "购买链接", "状态"])
+                writer.writerow(["用途", "型号", "封装", "立创编号",
+                                 "电压", "电流", "功率",
+                                 "价格", "购买链接", "状态"])
                 for comp in components:
                     writer.writerow([comp.purpose, comp.model, comp.package, comp.lcsc_id,
+                                     comp.voltage, comp.current, comp.power,
                                      comp.current_price, comp.buy_link, comp.status])
                 text = output.getvalue()
             else:
@@ -386,6 +578,54 @@ class MainWindow(tk.Tk):
         except Exception as e:
             log_error(e)
             messagebox.showerror("导出失败", f"导出过程中发生错误：{e}")
+
+    # ==================== AI 提示词（可选附加本地文档） ====================
+    def copy_ai_prompt(self):
+        choice = messagebox.askyesnocancel(
+            "AI 提示词",
+            "是否要附加一份本地文档？\n\n"
+            "  是  = 选择文档，提示词 + 文档内容一起复制（推荐）\n"
+            "  否  = 只复制提示词（你自己去 AI 那里贴原始信息）\n"
+            "  取消 = 关闭"
+        )
+        if choice is None:
+            return
+
+        filepath = None
+        if choice:
+            filepath = filedialog.askopenfilename(
+                title="选择要附加的文档",
+                filetypes=[
+                    ("文本类文件", "*.txt *.md *.log *.csv *.json *.xml *.yaml *.yml"),
+                    ("所有文件", "*.*"),
+                ],
+            )
+            if not filepath:
+                filepath = None
+
+        try:
+            text = component_service.build_ai_prompt_with_file(filepath)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+
+            if filepath:
+                fname = os.path.basename(filepath)
+                messagebox.showinfo(
+                    "已复制",
+                    "提示词 + 文档内容已复制到剪贴板。\n\n"
+                    f"文档：{fname}\n"
+                    f"总长度：{len(text)} 字符\n\n"
+                    "直接粘到 AI 对话框即可，AI 会按规范解析文档里的元件信息。"
+                )
+            else:
+                messagebox.showinfo(
+                    "已复制",
+                    "AI 提示词已复制到剪贴板。\n\n"
+                    "使用方式：把提示词粘给 AI，再附上你要处理的原始信息。"
+                )
+        except Exception as e:
+            log_error(e)
+            messagebox.showerror("复制失败", f"复制 AI 提示词时出错：{e}")
 
     # ==================== 价格校准 ====================
     def show_price_outdated(self):
@@ -461,7 +701,7 @@ class TextInputDialog(tk.Toplevel):
         self.component = component
         self.theme_name = parent.current_theme
         self.title("编辑元件" if component else "添加元件")
-        self.geometry("600x600")
+        self.geometry("620x640")
         self.resizable(False, False)
 
         theme = THEMES[self.theme_name]
@@ -486,6 +726,9 @@ class TextInputDialog(tk.Toplevel):
 型号: 例如 SL2.1A
 封装: 例如 SOP-16
 引脚数: 例如 16
+电压: 例如 5V
+电流: 例如 500mA
+功率: 例如 0.25W
 关键参数: 例如 VDD5=5V，12MHz晶振
 特殊注意: 例如 VDD33/VDD18只接电容
 立创编号: 例如 C192893
@@ -495,11 +738,12 @@ class TextInputDialog(tk.Toplevel):
 状态: 未验证 / 已验证 / 已淘汰
 （可留空，但用途、通用描述、型号建议填写）
 
-【批量添加】多个元件请用空行分隔，每段格式同上。"""
+【批量添加】多个元件请用空行分隔，每段格式同上。
+【AI 提示词】主界面「AI 提示词」按钮一键复制完整规范。"""
 
         ttk.Label(self, text=self.info_text, justify=tk.LEFT).pack(padx=10, pady=(10, 5))
 
-        self.text = tk.Text(self, height=12, bg=theme["bg_input"], fg=theme["fg_text"],
+        self.text = tk.Text(self, height=16, bg=theme["bg_input"], fg=theme["fg_text"],
                             insertbackground=theme["fg_text"])
         self.text.pack(fill=tk.BOTH, padx=10, pady=(0, 5))
 
@@ -510,6 +754,7 @@ class TextInputDialog(tk.Toplevel):
 
         save_text = "保存修改" if component else "添加元件"
         ttk.Button(inner_btn_frame, text=save_text, command=self.save).pack(side=tk.LEFT, padx=5)
+        ttk.Button(inner_btn_frame, text="📋 从剪贴板填充", command=self.fill_from_clipboard).pack(side=tk.LEFT, padx=5)
         ttk.Button(inner_btn_frame, text="导出规则", command=self.export_rule).pack(side=tk.LEFT, padx=5)
         ttk.Button(inner_btn_frame, text="取消", command=self.destroy).pack(side=tk.LEFT, padx=5)
 
@@ -518,7 +763,9 @@ class TextInputDialog(tk.Toplevel):
             lines = []
             field_names = {
                 "purpose": "用途", "generic_desc": "通用描述", "model": "型号",
-                "package": "封装", "pin_count": "引脚数", "key_params": "关键参数",
+                "package": "封装", "pin_count": "引脚数",
+                "voltage": "电压", "current": "电流", "power": "功率",
+                "key_params": "关键参数",
                 "pin_notes": "特殊注意", "lcsc_id": "立创编号", "buy_link": "购买链接",
                 "current_price": "价格", "supplier": "供应商", "status": "状态"
             }
@@ -529,6 +776,28 @@ class TextInputDialog(tk.Toplevel):
                 else:
                     lines.append(f"{label}: ")
             self.text.insert("1.0", "\n".join(lines))
+
+    def fill_from_clipboard(self):
+        try:
+            raw = self.clipboard_get()
+        except Exception:
+            messagebox.showwarning("提示", "剪贴板是空的")
+            return
+        if not raw or not raw.strip():
+            messagebox.showwarning("提示", "剪贴板是空的")
+            return
+
+        cleaned = _strip_ai_wrappers(raw)
+        if not cleaned:
+            messagebox.showwarning("提示", "剪贴板内容为空")
+            return
+
+        preview = cleaned if len(cleaned) < 300 else cleaned[:300] + "..."
+        if not messagebox.askyesno("确认", f"用剪贴板内容覆盖当前文本框？\n\n预览：\n{preview}"):
+            return
+        self.text.delete("1.0", tk.END)
+        self.text.insert("1.0", cleaned)
+        messagebox.showinfo("成功", "已从剪贴板填充，检查无误后点保存")
 
     def validate_text_format(self, raw_text):
         errors = []
@@ -553,7 +822,9 @@ class TextInputDialog(tk.Toplevel):
         data = {}
         field_map = {
             "用途": "purpose", "通用描述": "generic_desc", "型号": "model",
-            "封装": "package", "引脚数": "pin_count", "关键参数": "key_params",
+            "封装": "package", "引脚数": "pin_count",
+            "电压": "voltage", "电流": "current", "功率": "power",
+            "关键参数": "key_params",
             "特殊注意": "pin_notes", "立创编号": "lcsc_id", "购买链接": "buy_link",
             "价格": "current_price", "供应商": "supplier", "状态": "status"
         }
@@ -611,6 +882,7 @@ class TextInputDialog(tk.Toplevel):
 
     def save(self):
         raw_text = self.text.get("1.0", tk.END).strip()
+        raw_text = _strip_ai_wrappers(raw_text)
         blocks = [b.strip() for b in raw_text.split('\n\n') if b.strip()]
 
         if self.component is not None and len(blocks) > 1:
@@ -727,9 +999,12 @@ SOP-16 12MHz
         try:
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(["用途", "型号", "封装", "立创编号", "价格", "购买链接", "状态"])
+            writer.writerow(["用途", "型号", "封装", "立创编号",
+                             "电压", "电流", "功率",
+                             "价格", "购买链接", "状态"])
             for comp in self.matched_components:
                 writer.writerow([comp.purpose, comp.model, comp.package, comp.lcsc_id,
+                                 comp.voltage, comp.current, comp.power,
                                  comp.current_price, comp.buy_link, comp.status])
             text = output.getvalue()
             self.clipboard_clear()

@@ -1,10 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+元件数据模型，对应数据库 components 表
+"""
 from dataclasses import dataclass, fields, field
 from datetime import datetime
 from typing import Optional
 
+
 def _now_str() -> str:
     """生成当前时间字符串，格式：YYYY-MM-DD HH:MM:SS"""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 @dataclass
 class Component:
@@ -16,6 +22,9 @@ class Component:
     pin_count: int = 0
     key_params: str = ""
     pin_notes: str = ""
+    voltage: str = ""          # 新增：工作电压
+    current: str = ""          # 新增：工作电流
+    power: str = ""            # 新增：功率/耗散
     lcsc_id: str = ""
     buy_link: str = ""
     current_price: float = 0.0
@@ -37,6 +46,9 @@ class Component:
             "pin_count": self.pin_count,
             "key_params": self.key_params,
             "pin_notes": self.pin_notes,
+            "voltage": self.voltage,
+            "current": self.current,
+            "power": self.power,
             "lcsc_id": self.lcsc_id,
             "buy_link": self.buy_link,
             "current_price": self.current_price,

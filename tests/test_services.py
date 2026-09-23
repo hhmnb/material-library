@@ -147,6 +147,43 @@ class ComponentServiceTest(unittest.TestCase):
         from services import component_service
         self.assertEqual(component_service.list_all_components(), [])
 
+    # ---------- 新增：电气参数 ----------
+
+    def test_voltage_current_power_roundtrip(self):
+        """电压/电流/功率能存进数据库并读回来"""
+        from models.component import Component
+        from services import component_service
+
+        cid = component_service.add_component(Component(
+            purpose="LDO 芯片",
+            generic_desc="3.3V LDO",
+            model="AMS1117-3.3",
+            package="SOT-223",
+            voltage="5V",
+            current="800mA",
+            power="1W",
+            lcsc_id="C6186",
+        ))
+        got = component_service.get_component_by_id(cid)
+        self.assertEqual(got.voltage, "5V")
+        self.assertEqual(got.current, "800mA")
+        self.assertEqual(got.power, "1W")
+
+    def test_update_voltage_current(self):
+        """能通过 update_component 更新电气参数"""
+        from models.component import Component
+        from services import component_service
+
+        cid = component_service.add_component(Component(
+            purpose="TVS", generic_desc="TVS 5V", model="SRV05-4",
+            package="SOT-23-6", lcsc_id="C384887",
+        ))
+        component_service.update_component(cid, voltage="5V", current="1A", power="0.5W")
+        got = component_service.get_component_by_id(cid)
+        self.assertEqual(got.voltage, "5V")
+        self.assertEqual(got.current, "1A")
+        self.assertEqual(got.power, "0.5W")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

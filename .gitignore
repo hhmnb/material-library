@@ -1,17 +1,66 @@
+# ==================== Python ====================
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ==================== 虚拟环境 ====================
 .venv/
+venv/
+ENV/
+env/
+.python-version
+
+# ==================== 数据库（绝对不要推）====================
+*.db
+*.sqlite
+*.sqlite3
+data/
+db/
+
+# ==================== 日志 & 临时文件 ====================
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ==================== IDE ====================
 .idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
 
-# 数据库（含备份）
-data/*.db
-data/*.db.bak
-database/data/*.db
-database/data/*.db.bak
-database/data/*.db.old
+# ==================== 导出数据（个人数据，别推）====================
+*.csv
+!requirements.csv
+exports/
+backup/
 
-# 日志和缓存
-error.log
-ui/error.log
-utils/error.log
+# ==================== 截图（如果不想推）====================
+screenshots/*.png
+!screenshots/.gitkeep
+
+# ==================== 本地缓存 / 笔记 ====================
+
+# ==================== 本地缓存 / 笔记 ====================
 .ai_ref_cache.json
+README_local.md

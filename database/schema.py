@@ -32,6 +32,9 @@ def init_db():
         pin_count INTEGER,
         key_params TEXT,
         pin_notes TEXT,
+        voltage TEXT,
+        current TEXT,
+        power TEXT,
         lcsc_id TEXT,
         buy_link TEXT,
         current_price REAL,
@@ -43,11 +46,24 @@ def init_db():
     )
     """)
 
+    # ============ 老库迁移 ============
     cursor.execute("PRAGMA table_info(components)")
     columns = [col[1] for col in cursor.fetchall()]
+
     if 'price_updated_at' not in columns:
         cursor.execute("ALTER TABLE components ADD COLUMN price_updated_at TEXT")
         cursor.execute("UPDATE components SET price_updated_at = created_at WHERE price_updated_at IS NULL")
+        print("✅ components 表已添加 price_updated_at 列")
+
+    # 电气参数三剑客
+    for col_name, col_type in (
+        ("voltage", "TEXT"),
+        ("current", "TEXT"),
+        ("power", "TEXT"),
+    ):
+        if col_name not in columns:
+            cursor.execute(f"ALTER TABLE components ADD COLUMN {col_name} {col_type}")
+            print(f"✅ components 表已添加 {col_name} 列")
 
     # ============ 复习日志表 ============
     cursor.execute("""
@@ -106,6 +122,42 @@ def init_db():
     if 'lcsc_ids' not in fp_columns:
         cursor.execute("ALTER TABLE footprints ADD COLUMN lcsc_ids TEXT")
         print("✅ footprints 表已添加 lcsc_ids 列")
+
+    # ============ 项目表（与元件表完全独立）============
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now', 'localtime')),
+        updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+    )
+    """)
+
+    # ============ 项目-元件关联表（多对多）============
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS project_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        component_id INTEGER NOT NULL,
+        quantity INTEGER DEFAULT 1,
+        note TEXT DEFAULT '',
+        added_at TEXT DEFAULT (datetime('now', 'localtime')),
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (component_id) REFERENCES components(id) ON DELETE CASCADE,
+        UNIQUE (project_id, component_id)
+    )
+    """)
+
+    # 常用查询走索引
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_project_items_project
+    ON project_items(project_id)
+    """)
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS idx_project_items_component
+    ON project_items(component_id)
+    """)
 
     # 首次启动导入内置封装（BUILTIN_FOOTPRINTS 为空则跳过）
     cursor.execute("SELECT COUNT(*) FROM footprints")

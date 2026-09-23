@@ -2,10 +2,13 @@
 """封装速查（主窗口内的一页，不是弹窗）"""
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import os
 
 from services import footprint_service
+from services import component_service
 from utils.constants import THEMES
 from utils.error_handler import log_error
+from ui.wrapped_table import WrappedTable
 
 
 class FootprintSearchView(tk.Frame):
@@ -16,7 +19,7 @@ class FootprintSearchView(tk.Frame):
         super().__init__(parent, bg=theme["bg_main"])
         self.parent = parent
 
-        # 搜索栏
+        # ===== 搜索栏 =====
         top = ttk.Frame(self)
         top.pack(fill=tk.X, padx=10, pady=(10, 4))
         ttk.Label(top, text="搜索封装：").pack(side=tk.LEFT)
@@ -33,8 +36,11 @@ class FootprintSearchView(tk.Frame):
         self.count_var = tk.StringVar()
         ttk.Label(top, textvariable=self.count_var).pack(side=tk.LEFT, padx=10)
 
+        # 右侧按钮：导出 / 智能导入 / AI 提示词 / 回填规格
         ttk.Button(top, text="导出 CSV", command=self.export_csv).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(top, text="导入 CSV", command=self.import_csv).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(top, text="智能导入", command=self.smart_import).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(top, text="AI 提示词", command=self.copy_ai_prompt).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(top, text="回填规格", command=self.backfill_specs).pack(side=tk.RIGHT, padx=4)
 
         tip = ttk.Label(
             self,
@@ -42,40 +48,38 @@ class FootprintSearchView(tk.Frame):
         )
         tip.pack(fill=tk.X, padx=10, pady=(0, 4))
 
-        # 表格
+        # ===== 表格（WrappedTable） =====
         table_frame = ttk.Frame(self)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
-        cols = ("display", "name", "lcsc_ids", "category", "pins", "builtin", "note")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", selectmode="browse")
-        for key, text, width in [
-            ("display", "简介", 200),
-            ("name", "封装名", 220),
-            ("lcsc_ids", "C 编号", 140),
-            ("category", "分类", 60),
-            ("pins", "引脚", 45),
-            ("builtin", "来源", 55),
-            ("note", "备注", 180),
-        ]:
-            self.tree.heading(key, text=text)
-            self.tree.column(key, width=width, anchor=tk.W)
+        columns = [
+            {"key": "display",  "text": "简介",   "width": 200},
+            {"key": "name",     "text": "封装名", "width": 250},
+            {"key": "lcsc_ids", "text": "C 编号", "width": 130},
+            {"key": "specs",    "text": "规格",   "width": 180},
+            {"key": "category", "text": "分类",   "width": 70},
+            {"key": "pins",     "text": "引脚",   "width": 50},
+            {"key": "builtin",  "text": "来源",   "width": 60},
+            {"key": "note",     "text": "备注",   "width": 180},
+        ]
+        self.tbl = WrappedTable(
+            table_frame, columns, theme,
+            show_grid=True,
+            on_select=self._on_row_select,
+            on_double_click=self._on_row_double_click,
+            on_right_click=self._on_row_right_click,
+        )
+        self.tbl.pack(fill=tk.BOTH, expand=True)
 
-        vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.tree.bind("<Double-1>", self.on_double_click)
-
-        # 右键菜单
+        # ===== 右键菜单 =====
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="复制封装名", command=self.copy_name)
         self.context_menu.add_command(label="复制 C 编号", command=self.copy_lcsc)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="编辑选中", command=self.edit_footprint)
         self.context_menu.add_command(label="删除选中", command=self.delete_footprint)
-        self.tree.bind("<Button-3>", self.show_context_menu)
 
-        # 底部按钮
+        # ===== 底部按钮 =====
         bottom = ttk.Frame(self)
         bottom.pack(fill=tk.X, padx=10, pady=(4, 10))
         ttk.Button(bottom, text="添加封装", command=self.add_footprint).pack(side=tk.LEFT, padx=4)
@@ -94,21 +98,32 @@ class FootprintSearchView(tk.Frame):
         query = self.query_var.get()
         self.parent.last_footprint_query = query
         self.results = footprint_service.search(query)
-        for i in self.tree.get_children():
-            self.tree.delete(i)
+
+        rows = []
         for fp in self.results:
             lcsc = fp.get("lcsc_ids", [])
             if isinstance(lcsc, list):
-                lcsc = ",".join(lcsc)
-            self.tree.insert("", tk.END, values=(
-                fp.get("display", ""),
-                fp.get("name", ""),
-                lcsc or "",
-                fp.get("category", ""),
-                fp.get("pins") or "",
-                "内置" if fp.get("is_builtin") else "自定义",
-                fp.get("note", ""),
-            ))
+                lcsc_list = lcsc
+                lcsc_str = ",".join(lcsc)
+            else:
+                lcsc_str = lcsc or ""
+                lcsc_list = [t.strip() for t in lcsc_str.split(",") if t.strip()]
+
+            # 关联元件表查询规格
+            specs = component_service.get_specs_by_lcsc_ids(lcsc_list) if lcsc_list else ""
+
+            rows.append({
+                "display":  fp.get("display", ""),
+                "name":     fp.get("name", ""),
+                "lcsc_ids": lcsc_str,
+                "specs":    specs or "",
+                "category": fp.get("category", ""),
+                "pins":     fp.get("pins") or "",
+                "builtin":  "内置" if fp.get("is_builtin") else "自定义",
+                "note":     fp.get("note", ""),
+                "_fp":      fp,
+            })
+        self.tbl.set_data(rows)
         self.count_var.set(f"共 {len(self.results)} 条")
 
     def clear_search(self):
@@ -116,23 +131,19 @@ class FootprintSearchView(tk.Frame):
         self.do_search()
 
     def _selected_fp(self):
-        sel = self.tree.selection()
-        if not sel:
+        row = self.tbl.get_selected()
+        if not row:
             return None
-        idx = self.tree.index(sel[0])
-        return self.results[idx] if 0 <= idx < len(self.results) else None
+        return row.get("_fp")
 
-    def on_double_click(self, event):
+    # ==================== WrappedTable 回调 ====================
+    def _on_row_select(self, row_data, row_index):
+        pass
+
+    def _on_row_double_click(self, row_data, row_index):
         self.copy_name()
 
-    # ==================== 右键菜单 ====================
-    def show_context_menu(self, event):
-        """右键：先选中鼠标所在行，再弹出菜单"""
-        row_id = self.tree.identify_row(event.y)
-        if row_id:
-            self.tree.selection_set(row_id)
-        if not self.tree.selection():
-            return
+    def _on_row_right_click(self, event, row_data, row_index):
         self.context_menu.post(event.x_root, event.y_root)
 
     # ==================== 复制 ====================
@@ -174,7 +185,6 @@ class FootprintSearchView(tk.Frame):
             return
 
         try:
-            from services import component_service
             component_service.update_component(comp.id, package=fp["name"])
             self.parent.refresh_table()
             messagebox.showinfo("成功", f"已将 {comp.model} 的封装更新为：\n{fp['name']}")
@@ -218,7 +228,7 @@ class FootprintSearchView(tk.Frame):
         except Exception as e:
             messagebox.showerror("删除失败", str(e))
 
-    # ==================== 导入导出 ====================
+    # ==================== 导出 CSV ====================
     def export_csv(self):
         path = filedialog.asksaveasfilename(
             title="导出封装库",
@@ -235,51 +245,142 @@ class FootprintSearchView(tk.Frame):
             log_error(e)
             messagebox.showerror("导出失败", str(e))
 
-    def import_csv(self):
+    # ==================== 智能导入（自动识别封装库 / BOM） ====================
+    def smart_import(self):
         path = filedialog.askopenfilename(
-            title="导入封装库",
-            filetypes=[("CSV 文件", "*.csv")],
+            title="选择要导入的 CSV（自动识别封装库 / BOM）",
+            filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")],
         )
         if not path:
             return
 
-        report = footprint_service.validate_csv(path)
-
-        if report["file_error"]:
-            messagebox.showerror("文件错误", report["file_error"])
-            return
-
-        if report["errors"]:
-            lines = [f"文件：{path}", f"总行数：{report['total']}", ""]
-            lines.append(f"❌ 发现 {len(report['errors'])} 条错误，已拒绝导入。")
-            lines.append("")
-            lines.append("错误明细（前 20 条）：")
-            lines.extend(report["errors"][:20])
-            if len(report["errors"]) > 20:
-                lines.append(f"... 还有 {len(report['errors']) - 20} 条")
-            lines.append("")
-            lines.append("请修正 CSV 后重新导入，数据未做任何修改。")
-            messagebox.showerror("校验未通过", "\n".join(lines))
-            return
-
-        lines = [f"文件：{path}", f"总行数：{report['total']}", f"有效行：{report['valid']}", ""]
-        if report["warnings"]:
-            lines.append(f"⚠️ 警告 {len(report['warnings'])} 条（前 5 条）：")
-            lines.extend(report["warnings"][:5])
-            lines.append("")
-        lines.append("所有行通过校验，可以导入。")
-
-        if not messagebox.askyesno("确认导入", "\n".join(lines)):
-            return
-
         try:
-            result = footprint_service.import_from_csv(path, strict=True)
-            if result.get("aborted"):
-                messagebox.showerror("导入已终止", result.get("reason", "导入被拒绝"))
-                return
-            msg = f"新增 {result['success']} 条\n更新 {result['updated']} 条"
-            messagebox.showinfo("导入结果", msg)
-            self.do_search()
+            result = component_service.smart_import_csv(path)
         except Exception as e:
             log_error(e)
-            messagebox.showerror("导入失败", str(e))
+            messagebox.showerror("导入失败", f"读取 CSV 时出错：\n{e}")
+            return
+
+        kind = result.get("kind")
+
+        # 校验被拒（只可能出现在封装库分支）
+        if result.get("aborted"):
+            reason = result.get("reason", "已拒绝导入")
+            report = result.get("report") or {}
+            errs = report.get("errors") or []
+            lines = [f"文件：{path}", "识别类型：封装库", f"❌ {reason}"]
+            if errs:
+                lines.append("")
+                lines.append("错误明细（前 20 条）：")
+                lines.extend(errs[:20])
+                if len(errs) > 20:
+                    lines.append(f"... 还有 {len(errs) - 20} 条")
+            messagebox.showerror("导入未通过", "\n".join(lines))
+            return
+
+        # 正常结果
+        if kind == "footprint":
+            r = result["result"]
+            lines = [
+                f"文件：{path}",
+                "识别类型：✅ 封装库",
+                "",
+                f"新增：{r.get('success', 0)} 条",
+                f"更新：{r.get('updated', 0)} 条",
+            ]
+            messagebox.showinfo("智能导入 · 封装库", "\n".join(lines))
+            self.do_search()
+        else:
+            r = result["result"]
+            fails = r.get("failures", [])
+            lines = [
+                f"文件：{path}",
+                "识别类型：✅ BOM（元件）",
+                f"总行数：{r.get('total', 0)}",
+                "",
+                f"✅ 新增：{r.get('success', 0)} 条",
+                f"🔄 更新（信息更完整）：{r.get('updated', 0)} 条",
+                f"⏭ 跳过（重复且不更完整）：{r.get('skipped', 0)} 条",
+            ]
+            if fails:
+                lines.append("")
+                lines.append(f"ℹ 明细（前 30 条，共 {len(fails)}）：")
+                lines.extend(fails[:30])
+                if len(fails) > 30:
+                    lines.append(f"... 还有 {len(fails) - 30} 条")
+            messagebox.showinfo("智能导入 · BOM", "\n".join(lines))
+            self.do_search()
+            try:
+                self.parent.refresh_table()
+            except Exception:
+                pass
+
+    # ==================== AI 提示词（可选附加本地文档） ====================
+    def copy_ai_prompt(self):
+        """
+        与主界面一致：
+          是   → 选本地文档 → 提示词 + 文档内容 一起复制
+          否   → 只复制提示词
+          取消 → 什么都不做
+        """
+        choice = messagebox.askyesnocancel(
+            "AI 提示词",
+            "是否要附加一份本地文档？\n\n"
+            "  是  = 选择文档，提示词 + 文档内容一起复制（推荐）\n"
+            "  否  = 只复制提示词（你自己去 AI 那里贴原始信息）\n"
+            "  取消 = 关闭"
+        )
+        if choice is None:
+            return
+
+        filepath = None
+        if choice:
+            filepath = filedialog.askopenfilename(
+                title="选择要附加的文档",
+                filetypes=[
+                    ("文本类文件", "*.txt *.md *.log *.csv *.json *.xml *.yaml *.yml"),
+                    ("所有文件", "*.*"),
+                ],
+            )
+            if not filepath:
+                # 用户取消选文件，退化为只复制提示词
+                filepath = None
+
+        try:
+            text = component_service.build_ai_prompt_with_file(filepath)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+
+            if filepath:
+                fname = os.path.basename(filepath)
+                messagebox.showinfo(
+                    "已复制",
+                    "提示词 + 文档内容已复制到剪贴板。\n\n"
+                    f"文档：{fname}\n"
+                    f"总长度：{len(text)} 字符\n\n"
+                    "直接粘到 AI 对话框即可，AI 会按规范解析文档里的元件信息。"
+                )
+            else:
+                messagebox.showinfo(
+                    "已复制",
+                    "AI 提示词已复制到剪贴板。\n\n"
+                    "使用方式：把提示词粘给 AI，再附上你要处理的原始信息。"
+                )
+        except Exception as e:
+            log_error(e)
+            messagebox.showerror("复制失败", f"复制 AI 提示词时出错：{e}")
+
+    # ==================== 回填规格 ====================
+    def backfill_specs(self):
+        try:
+            result = component_service.backfill_specs_from_desc(only_empty=True)
+            self.do_search()
+            messagebox.showinfo(
+                "回填完成",
+                f"扫描：{result['scanned']} 条\n"
+                f"更新：{result['updated']} 条\n"
+                f"跳过：{result['skipped']} 条"
+            )
+        except Exception as e:
+            log_error(e)
+            messagebox.showerror("回填失败", str(e))

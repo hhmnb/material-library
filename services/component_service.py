@@ -15,35 +15,82 @@ from models.component import Component
 
 # ==================== AI 生成提示词（一键复制给 AI 用）====================
 
-AI_PROMPT_TEMPLATE = """精料库 · 数据生成规范（AI 提示词）
-================================================================
-本段整段发给 AI，让 AI 按下面的规范生成可批量导入"精料库"的数据。
+AI_PROMPT_TEMPLATE = """【机器解析契约 · 严禁自由发挥】
 
-【任务 1 · 生成元件（文本格式，粘到"添加元件"框批量导入）】
-规则：
-  1. 每行一个字段，用中文冒号（：）或英文冒号（:）分隔
-  2. 多个元件之间用【一个空行】分隔
-  3. 字段值可以为空，但保留标签更便于后续补填
-  4. 字段清单（顺序可任意）：
-     用途 | 通用描述 | 型号 | 封装 | 引脚数 | 电压 | 电流 | 功率 |
-     关键参数 | 特殊注意 | 立创编号 | 购买链接 | 价格 | 供应商 | 状态
-  5. 状态字段只能是：未验证 / 已验证 / 已淘汰
-  6. 引脚数是整数；价格是数字（不带单位）
+你正在生成一份由程序直接解析的数据文件。任何格式偏差都会导致解析失败。
+请严格遵守以下规则，只输出规定格式。
 
-【任务 2 · 生成封装库（CSV 格式，保存为 .csv 后用"智能导入"）】
-第一行必须是下面这个表头（英文，逗号分隔）：
-name,display,category,pins,tags,note,lcsc_ids
-说明：
-  name       封装名（唯一，必填），如 LED0603-RD
-  display    简介，如 "0603 LED · 状态指示"
-  category   分类，如 LED / USB / 阻容 / 半导体
-  pins       引脚数（整数）
-  tags       标签，多个用英文逗号隔开
-  note       备注
-  lcsc_ids   关联的立创编号，多个用英文逗号隔开
+============================================================
+一、输出格式
 
-================================================================
-【元件输出示例】
+1. 纯文本。禁止 markdown、代码块、```、# 标题。
+2. 禁止前言、后记、说明。不要写"好的"、"以下是结果"。
+3. 每个元件由若干行组成，每行格式：
+       字段名: 值
+4. 元件与元件之间用一个【空行】分隔。
+5. 字段名一字不差，顺序固定如下（共 15 个）：
+       用途
+       通用描述
+       型号
+       封装
+       引脚数
+       电压
+       电流
+       功率
+       关键参数
+       特殊注意
+       立创编号
+       购买链接
+       价格
+       供应商
+       状态
+6. 值为空时，写"字段名: "（冒号后一个空格），不要省略整行。
+
+============================================================
+二、最重要的一条规则 · 参数补全（务必执行）
+
+输入（BOM/描述）里通常缺少 电压、电流、功率。
+你有责任根据【型号】补全这三个参数，用你已有的电子元器件知识：
+    · AMS1117-3.3       → 电压: 5V（输入上限）  电流: 800mA  功率: 1W
+    · CC0603KRX7R9BB104 → 电压: 50V             电流:       功率: 
+    · SRV05-4           → 电压: 5V（反向工作）  电流: 1A     功率: 0.5W
+    · SMBJ24A           → 电压: 24V（反向工作） 电流:       功率: 600W（峰值）
+    · INA226AIDGSR      → 电压: 36V             电流:       功率: 
+    · 100nF 0603 电容   → 电压: 50V（常见耐压） 电流:       功率: 
+    · 47uF 1210 电容    → 电压: 25V（常见耐压） 电流:       功率: 
+    · 1kΩ 0603 电阻     → 电压:              电流:        功率: 0.1W
+    · 4.7kΩ 0603 电阻   → 电压:              电流:        功率: 0.1W
+    · TVS/ESD 器件      → 用工作电压+峰值电流+峰值功率
+
+补全规则：
+  1. 优先用你在 BOM 里能看到的明确信息
+  2. BOM 里没有的，用型号自身的规格补上
+  3. 阻容类：
+       电容 → 电压填常见耐压（0603 默认 50V，0805/1206 默认 25V）
+       电阻 → 功率填常见值（0603 默认 0.1W，0805 默认 0.125W，1206 默认 0.25W，2512 默认 1W）
+  4. 芯片类：查不到的参数（如 INA226 电流）可以留空，能查到的必须填
+  5. 只在你【完全不确定】的时候才留空；不要因为"BOM 里没写"就留空
+  6. 数字单位要带（50V / 800mA / 0.5W）
+
+============================================================
+三、正确输出示例
+
+用途: 电容
+通用描述: 100nF
+型号: CC0603KRX7R9BB104
+封装: C0603
+引脚数: 2
+电压: 50V
+电流: 
+功率: 
+关键参数: 100nF · C0603
+特殊注意: 
+立创编号: C14663
+购买链接: 
+价格: 
+供应商: YAGEO(国巨)
+状态: 未验证
+
 用途: LDO 稳压
 通用描述: 3.3V LDO
 型号: AMS1117-3.3
@@ -52,31 +99,15 @@ name,display,category,pins,tags,note,lcsc_ids
 电压: 5V
 电流: 800mA
 功率: 1W
-关键参数: 输出3.3V，最大1A
-特殊注意: 输入输出各接10uF
+关键参数: 输出3.3V
+特殊注意: 输入输出各接 10uF
 立创编号: C6186
-购买链接: https://item.szlcsc.com/6186.html
+购买链接: 
 价格: 0.35
 供应商: 立创商城
-状态: 已验证
+状态: 未验证
 
-用途: 退耦/滤波
-通用描述: 100nF/50V 0603
-型号: 0603B104K500NT
-封装: C0603
-引脚数: 2
-电压: 50V
-电流: 
-功率: 
-关键参数: X7R 材质
-特殊注意: 
-立创编号: C14663
-购买链接: 
-价格: 0.01
-供应商: 立创商城
-状态: 已验证
-
-用途: TVS/ESD 保护
+用途: TVS/ESD
 通用描述: SRV05-4
 型号: SRV05-4
 封装: SOT-23-6
@@ -88,18 +119,82 @@ name,display,category,pins,tags,note,lcsc_ids
 特殊注意: 靠近接口放置
 立创编号: C384887
 购买链接: 
-价格: 0.85
-供应商: 立创商城
-状态: 已验证
+价格: 
+供应商: Leiditech(雷卯电子)
+状态: 未验证
 
-================================================================
-【封装库 CSV 输出示例】
-name,display,category,pins,tags,note,lcsc_ids
-LED0603-RD,0603 LED · 状态指示,LED,2,0603;LED,状态灯,C125095
-C0603,0603 电容 · 退耦滤波,阻容,2,0603,最常用,C14663
-R0603,0603 电阻 · 上拉/下拉/限流,阻容,2,0603,通用,C122969
-SOT-23-6,TVS/ESD 保护专用,半导体,6,SOT-23-6,SRV05-4 用,C384887
-================================================================
+============================================================
+四、字段填写规则
+
+用途      一句话功能或类型，如 "电容" / "电阻" / "芯片" / "LDO 稳压" / "TVS/ESD" / "连接器"
+通用描述  原始描述文字（BOM 的 Comment 列）
+型号      精确型号，如 CC0603KRX7R9BB104 / AMS1117-3.3
+封装      完整封装名，如 C0603 / SOT-223
+引脚数    整数，从封装名推断：
+              SOT-23-6 → 6；SOT-23-3 → 3
+              MSOP-10 / DFN-10 / ESSOP-10 / DFN-8 → 10 / 10 / 10 / 8
+              SOP-16 / TSSOP-16 → 16
+              USB-C-16PIN → 16
+              RES-SMD_4P / SW-SMD_4P → 4
+              C0603 / R0603 / R2512 / F2920 / SOD-323 / DO-214AA / LED0603 / IND-SMD → 2
+              CONN-TH_xxx-2P → 2
+              不确定 → 0
+电压      ★ 见第二节，必须尽量补全
+电流      ★ 见第二节，必须尽量补全
+功率      ★ 见第二节，必须尽量补全
+关键参数  格式 "Comment · 封装主体"，如 100nF · C0603
+特殊注意  使用注意，没有留空
+立创编号  C 开头，没有留空
+购买链接  完整 URL，没有留空
+价格      数字，没有留空
+供应商    品牌名，如 "YAGEO(国巨)" / "TI(德州仪器)"
+状态      只能是 未验证 / 已验证 / 已淘汰
+
+============================================================
+五、输入是嘉立创 BOM 表格时
+
+表头：
+    No. | Quantity | Comment | Designator | Footprint | Value |
+    Manufacturer Part | Manufacturer | Supplier Part | Supplier
+
+字段映射：
+    Comment             → 通用描述
+    Manufacturer Part   → 型号
+    Footprint           → 封装（完整保留）
+    Manufacturer        → 供应商
+    Supplier Part       → 立创编号
+    Value               → 与 Comment 不同时拼到"关键参数"
+    Voltage/Current/Power（若有列） → 直接填到对应字段
+    Quantity            → 忽略
+    Designator          → 忽略
+    No.                 → 忽略
+    Supplier            → 忽略
+
+去重：按"型号"去重，型号相同只输出一次。
+跳过第一行表头。
+
+============================================================
+六、用途推断
+
+    C0603 / C0805 / C1206 / C1210 → 电容
+    R0603 / R2512 → 电阻
+    L0603 / IND-SMD → 电感
+    LED 开头 → LED
+    SOD- / DO- → 二极管
+    SOT-23-6 且 Comment 含 TVS/ESD → TVS/ESD
+    F 开头 → 保险丝
+    USB → USB 接口
+    CONN- → 连接器
+    SW- → 开关
+    WIFIM / ESP32 → 无线模块
+    其他 SOP / DFN / MSOP / QFN / SOT-23-3 → 芯片
+    判断不出 → "BOM导入"
+
+============================================================
+七、现在，请处理下面的原始信息
+
+再次强调：**电压 / 电流 / 功率 必须根据型号补全**，不要因为 BOM 里没写就留空。
+按上述规则输出。不要任何前言、后记、markdown。
 """
 
 
@@ -515,18 +610,18 @@ def get_components_price_outdated(days: int = 15) -> List[Component]:
     return [Component.from_dict(dict(zip(columns, row))) for row in rows]
 
 
-# ==================== BOM 导入（编号/型号去重 + 完整度覆盖）====================
+# ==================== BOM 导入（核心解析逻辑）====================
 
-def import_bom_from_csv(filepath: str) -> Dict[str, Any]:
+def _parse_bom_text(text: str) -> Dict[str, Any]:
     """
-    从 CSV 文件导入 BOM，自动检测编码。
-    去重与覆盖策略：
-        1) 立创编号完全相同 / 型号完全相同：
-              - 新数据完整度 > 已有 → 用新数据补全（只补非空字段）
-              - 否则 → 跳过
-        2) 都没有 → 新增
+    内部函数：解析已经解码的 BOM 文本并导入。
+    - import_bom_from_csv 负责读文件 + 编码检测，然后调它
+    - import_bom_from_text 直接从剪贴板文本调它
     """
-    from utils.spec_parser import parse_specs
+    from utils.spec_parser import (
+        parse_specs, extract_pin_count, infer_purpose,
+        build_key_params,
+    )
 
     success = 0
     updated = 0
@@ -534,32 +629,10 @@ def import_bom_from_csv(filepath: str) -> Dict[str, Any]:
     failures = []
     total = 0
 
-    with open(filepath, 'rb') as f:
-        raw_data = f.read()
-
-    if raw_data.startswith(b'\xff\xfe'):
-        encoding = 'utf-16-le'
-    elif raw_data.startswith(b'\xfe\xff'):
-        encoding = 'utf-16-be'
-    elif raw_data.startswith(b'\xef\xbb\xbf'):
-        encoding = 'utf-8-sig'
-    else:
-        try:
-            raw_data.decode('utf-8')
-            encoding = 'utf-8'
-        except UnicodeDecodeError:
-            encoding = 'gbk'
-
-    try:
-        text = raw_data.decode(encoding)
-    except UnicodeDecodeError:
-        return {"success": 0, "updated": 0, "skipped": 0,
-                "failures": ["无法识别文件编码，请转换为 UTF-8"], "total": 0}
-
     reader = csv.DictReader(io.StringIO(text))
     if reader.fieldnames is None:
         return {"success": 0, "updated": 0, "skipped": 0,
-                "failures": ["CSV 文件为空或缺少表头"], "total": 0}
+                "failures": ["内容为空或缺少表头"], "total": 0}
 
     def pick(row, *candidates):
         for name in candidates:
@@ -593,6 +666,7 @@ def import_bom_from_csv(filepath: str) -> Dict[str, Any]:
         mfr_part = pick(row, 'Manufacturer Part', '制造商型号', '型号')
         supplier_part = pick(row, 'Supplier Part', '供应商编号', '立创编号')
         manufacturer = pick(row, 'Manufacturer', '制造商', '供应商')
+        value_col = pick(row, 'Value', '值')
         col_v = pick(row, 'Voltage', '电压')
         col_i = pick(row, 'Current', '电流')
         col_p = pick(row, 'Power', '功率')
@@ -602,7 +676,7 @@ def import_bom_from_csv(filepath: str) -> Dict[str, Any]:
             continue
 
         model = mfr_part if mfr_part else comment
-        generic_desc = comment if comment else model
+        generic_desc = comment if comment else (value_col or model)
         lcsc_id = supplier_part if supplier_part else ""
 
         parsed = parse_specs(comment)
@@ -610,13 +684,17 @@ def import_bom_from_csv(filepath: str) -> Dict[str, Any]:
         current = col_i or parsed["current"]
         power   = col_p or parsed["power"]
 
+        pin_count = extract_pin_count(footprint)
+        purpose = infer_purpose(footprint, comment) or "BOM导入"
+        key_params = build_key_params(comment, footprint, value_col)
+
         new_data = {
-            "purpose":       "BOM导入",
+            "purpose":       purpose,
             "generic_desc":  generic_desc,
             "model":         model,
             "package":       footprint,
-            "pin_count":     0,
-            "key_params":    comment,
+            "pin_count":     pin_count,
+            "key_params":    key_params,
             "pin_notes":     "",
             "voltage":       voltage,
             "current":       current,
@@ -694,6 +772,52 @@ def import_bom_from_csv(filepath: str) -> Dict[str, Any]:
         "failures": failures,
         "total": total,
     }
+
+
+def import_bom_from_csv(filepath: str) -> Dict[str, Any]:
+    """
+    从 CSV 文件导入 BOM，自动检测编码。
+    去重与覆盖策略：
+        1) 立创编号完全相同 / 型号完全相同：
+              - 新数据完整度 > 已有 → 用新数据补全（只补非空字段）
+              - 否则 → 跳过
+        2) 都没有 → 新增
+    引脚数、用途、关键参数自动从 Footprint / Comment 推断。
+    """
+    with open(filepath, 'rb') as f:
+        raw_data = f.read()
+
+    if raw_data.startswith(b'\xff\xfe'):
+        encoding = 'utf-16-le'
+    elif raw_data.startswith(b'\xfe\xff'):
+        encoding = 'utf-16-be'
+    elif raw_data.startswith(b'\xef\xbb\xbf'):
+        encoding = 'utf-8-sig'
+    else:
+        try:
+            raw_data.decode('utf-8')
+            encoding = 'utf-8'
+        except UnicodeDecodeError:
+            encoding = 'gbk'
+
+    try:
+        text = raw_data.decode(encoding)
+    except UnicodeDecodeError:
+        return {"success": 0, "updated": 0, "skipped": 0,
+                "failures": ["无法识别文件编码，请转换为 UTF-8"], "total": 0}
+
+    return _parse_bom_text(text)
+
+
+def import_bom_from_text(text: str) -> Dict[str, Any]:
+    """
+    从文本直接导入 BOM（用于从剪贴板粘贴）。
+    输入是已经解码好的字符串，支持 Tab 或逗号分隔。
+    """
+    if not text or not text.strip():
+        return {"success": 0, "updated": 0, "skipped": 0,
+                "failures": ["内容为空"], "total": 0}
+    return _parse_bom_text(text)
 
 
 # ==================== 智能导入（自动识别封装库 / BOM）====================
@@ -833,3 +957,125 @@ def backfill_specs_from_desc(only_empty: bool = True) -> Dict[str, Any]:
         updated += 1
 
     return {"scanned": scanned, "updated": updated, "skipped": skipped}
+
+# ==================== 从元件库聚合封装视图 ====================
+
+def list_footprints_from_components(keyword: str = "") -> List[Dict[str, Any]]:
+    """
+    从 components 表按 package 字段聚合出"封装视图"。
+    每个封装汇总该封装下所有元件的信息。
+    """
+    from utils.spec_parser import extract_pin_count, infer_purpose
+    from collections import defaultdict
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if keyword:
+        like = f"%{keyword}%"
+        cursor.execute("""
+            SELECT package, purpose, lcsc_id, voltage, current, power,
+                   model, generic_desc, supplier
+            FROM components
+            WHERE package LIKE ?
+            ORDER BY package, id
+        """, (like,))
+    else:
+        cursor.execute("""
+            SELECT package, purpose, lcsc_id, voltage, current, power,
+                   model, generic_desc, supplier
+            FROM components
+            WHERE package IS NOT NULL AND package != ''
+            ORDER BY package, id
+        """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    groups = defaultdict(list)
+    for (pkg, purpose, lcsc_id, v, i, p, model, desc, supplier) in rows:
+        if not pkg:
+            continue
+        groups[pkg].append({
+            "purpose": purpose or "",
+            "lcsc_id": lcsc_id or "",
+            "voltage": v or "",
+            "current": i or "",
+            "power": p or "",
+            "model": model or "",
+            "generic_desc": desc or "",
+            "supplier": supplier or "",
+        })
+
+    results = []
+    for pkg, items in groups.items():
+        # 合并 C 编号（去重）
+        lcsc_set = []
+        for it in items:
+            cid = it["lcsc_id"].strip()
+            if cid and cid not in lcsc_set:
+                lcsc_set.append(cid)
+        lcsc_str = ",".join(lcsc_set)
+
+        # 合并规格（每个 C 编号一行）
+        spec_lines = []
+        for it in items:
+            parts = []
+            if it["voltage"]:
+                parts.append(f"V:{it['voltage']}")
+            if it["current"]:
+                parts.append(f"I:{it['current']}")
+            if it["power"]:
+                parts.append(f"P:{it['power']}")
+            if parts and it["lcsc_id"]:
+                line = f"{it['lcsc_id']}: " + " ".join(parts)
+                if line not in spec_lines:
+                    spec_lines.append(line)
+        specs = "\n".join(spec_lines)
+
+        # 用途聚合
+        purposes = []
+        for it in items:
+            pu = it["purpose"].strip()
+            if pu and pu not in purposes:
+                purposes.append(pu)
+        if len(purposes) <= 3:
+            purpose_str = " / ".join(purposes)
+        else:
+            purpose_str = " / ".join(purposes[:3]) + f" 等 {len(purposes)} 类"
+
+        # 分类：从封装名推断
+        category = infer_purpose(pkg, "")
+        if category == "BOM导入":
+            category = ""
+
+        # 引脚数
+        pins = extract_pin_count(pkg)
+
+        # 供应商聚合
+        suppliers = []
+        for it in items:
+            s = it["supplier"].strip()
+            if s and s not in suppliers:
+                suppliers.append(s)
+        if len(suppliers) <= 2:
+            supplier_str = " / ".join(suppliers)
+        else:
+            supplier_str = " / ".join(suppliers[:2]) + " 等"
+
+        results.append({
+            "display": purpose_str,
+            "name": pkg,
+            "lcsc_ids": lcsc_str,
+            "specs": specs,
+            "category": category,
+            "pins": pins,
+            "builtin": "元件库",
+            "note": f"{len(items)} 个元件 · {supplier_str}",
+            "is_builtin": False,
+            "_count": len(items),
+        })
+
+    # 按元件数量降序
+    results.sort(key=lambda x: -x["_count"])
+    return results

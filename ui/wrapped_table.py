@@ -192,6 +192,17 @@ class WrappedTable(tk.Frame):
             return self.data[self.selected_row]
         return None
 
+    def set_columns(self, columns):
+        """
+        运行时切换列定义。
+        columns 是 [{"key": ..., "text": ..., "width": ...}, ...] 列表。
+        切换后会重建表头，并用现有 data 重绘。
+        """
+        self.columns = columns
+        self._build_header()
+        if self.data:
+            self.set_data(self.data)
+
     def update_theme(self, theme):
         """主题切换时调用，重建显示"""
         self.theme = theme

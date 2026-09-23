@@ -109,6 +109,7 @@ class MainWindow(tk.Tk):
         table_frame = ttk.Frame(self.main_view)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
+        # 初始列（全部视图）
         columns = [
             {"key": "purpose",       "text": "用途",     "width": 110},
             {"key": "model",         "text": "型号",     "width": 140},
@@ -148,7 +149,9 @@ class MainWindow(tk.Tk):
         ttk.Button(button_frame, text="参数匹配", command=self.open_match_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="批量更新价格", command=self.open_batch_price_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="批量加入项目", command=self.batch_add_to_project).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="导出数据", command=self.export_data).pack(side=tk.LEFT, padx=5)
+        # 导出数据按钮：保存引用，方便动态改文字
+        self._btn_export = ttk.Button(button_frame, text="导出数据", command=self.export_data)
+        self._btn_export.pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="AI 提示词", command=self.copy_ai_prompt).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="价格校准", command=self.show_price_outdated).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="刷新", command=self.refresh_table).pack(side=tk.LEFT, padx=5)
@@ -169,6 +172,12 @@ class MainWindow(tk.Tk):
         if self.footprint_view is None:
             from ui.footprint_search_dialog import FootprintSearchView
             self.footprint_view = FootprintSearchView(self)
+        else:
+            # 每次切过来刷新一下（保证数据最新）
+            try:
+                self.footprint_view.do_search()
+            except Exception:
+                pass
         self.footprint_view.pack(fill=tk.BOTH, expand=True)
 
     def get_selected_component(self):
@@ -379,6 +388,18 @@ class MainWindow(tk.Tk):
     def open_batch_price_dialog(self):
         BatchPriceDialog(self)
 
+    def notify_data_changed(self):
+        """数据变更后统一刷新主界面和封装页"""
+        try:
+            self.refresh_table()
+        except Exception as e:
+            log_error(e)
+        if self.footprint_view is not None:
+            try:
+                self.footprint_view.do_search()
+            except Exception as e:
+                log_error(e)
+
     # ==================== 主题 ====================
     def apply_theme(self, theme_name):
         theme = THEMES[theme_name]
@@ -470,6 +491,8 @@ class MainWindow(tk.Tk):
                     "package": comp.get("package", ""),
                     "lcsc_id": comp.get("lcsc_id", ""),
                     "specs": specs,
+                    "quantity": comp.get("quantity", ""),
+                    "item_note": comp.get("item_note", ""),
                     "current_price": comp.get("current_price", 0.0),
                     "buy_link": comp.get("buy_link", ""),
                     "status": comp.get("status", ""),
@@ -483,6 +506,8 @@ class MainWindow(tk.Tk):
                     "package": comp.package,
                     "lcsc_id": comp.lcsc_id,
                     "specs": format_specs(comp),
+                    "quantity": "",
+                    "item_note": "",
                     "current_price": comp.current_price,
                     "buy_link": comp.buy_link,
                     "status": comp.status,
@@ -505,9 +530,44 @@ class MainWindow(tk.Tk):
             data = []
 
         self.current_components = data
+
+        # 根据视图切换表格列
+        if project_id is None:
+            # 全部视图：不显示项目专属列
+            columns = [
+                {"key": "purpose",       "text": "用途",     "width": 110},
+                {"key": "model",         "text": "型号",     "width": 140},
+                {"key": "package",       "text": "封装",     "width": 110},
+                {"key": "lcsc_id",       "text": "立创编号", "width": 100},
+                {"key": "specs",         "text": "规格",     "width": 170},
+                {"key": "current_price", "text": "价格",     "width": 70},
+                {"key": "buy_link",      "text": "购买链接", "width": 220},
+                {"key": "status",        "text": "状态",     "width": 80},
+            ]
+        else:
+            # 项目视图：多显示"用量"、"位号/备注"
+            columns = [
+                {"key": "purpose",       "text": "用途",     "width": 100},
+                {"key": "model",         "text": "型号",     "width": 130},
+                {"key": "package",       "text": "封装",     "width": 100},
+                {"key": "lcsc_id",       "text": "立创编号", "width": 90},
+                {"key": "specs",         "text": "规格",     "width": 150},
+                {"key": "quantity",      "text": "用量",     "width": 50},
+                {"key": "item_note",     "text": "位号/备注", "width": 140},
+                {"key": "current_price", "text": "价格",     "width": 60},
+                {"key": "buy_link",      "text": "购买链接", "width": 180},
+            ]
+
+        self.tbl.set_columns(columns)
         self.tbl.set_data(self._components_to_rows(data))
-        # 刷新项目下拉（顺便把新项目列出来）
         self.refresh_project_combo()
+
+        # 更新"导出数据"按钮文字
+        if hasattr(self, "_btn_export") and self._btn_export is not None:
+            if project_id is None:
+                self._btn_export.config(text="导出数据")
+            else:
+                self._btn_export.config(text="导出本项目")
 
     def display_components(self, components):
         """给参数匹配对话框用：直接显示一批 Component"""
@@ -548,6 +608,114 @@ class MainWindow(tk.Tk):
 
     # ==================== 导出数据（复制到剪贴板） ====================
     def export_data(self):
+        """导出数据到剪贴板。
+        项目视图下：导出当前项目的 BOM（含用量、备注、总价）
+        全部视图下：导出所有元件（原有逻辑）
+        """
+        # ---------- 项目视图：导出该项目 BOM ----------
+        if self.current_project is not None:
+            proj = self.current_project
+            proj_name = proj["name"]
+            project_id = proj["id"]
+
+            try:
+                items = project_service.list_project_items(project_id)
+            except Exception as e:
+                log_error(e)
+                messagebox.showerror("导出失败", f"读取项目元件时出错：{e}")
+                return
+
+            if not items:
+                messagebox.showwarning("提示", f"项目「{proj_name}」下暂无元件")
+                return
+
+            # 询问导出格式
+            choice = messagebox.askyesnocancel(
+                "导出项目 BOM",
+                f"项目：{proj_name}\n元件数：{len(items)}\n\n"
+                "选择格式：\n"
+                "  是  = CSV（适合粘贴到 Excel）\n"
+                "  否  = JSON（保留全部字段）\n"
+                "  取消 = 返回"
+            )
+            if choice is None:
+                return
+
+            try:
+                if choice:
+                    output = io.StringIO()
+                    writer = csv.writer(output)
+                    writer.writerow([
+                        "用量", "型号", "封装", "立创编号", "规格",
+                        "位号/备注", "单价", "小计", "购买链接", "状态"
+                    ])
+                    total_cost = 0.0
+                    for it in items:
+                        qty = it.get("quantity", 1) or 1
+                        price = it.get("current_price", 0.0) or 0.0
+                        try:
+                            sub = float(price) * int(qty)
+                        except (ValueError, TypeError):
+                            sub = 0.0
+                        total_cost += sub
+
+                        specs_parts = []
+                        if it.get("voltage"):
+                            specs_parts.append(f"V:{it['voltage']}")
+                        if it.get("current"):
+                            specs_parts.append(f"I:{it['current']}")
+                        if it.get("power"):
+                            specs_parts.append(f"P:{it['power']}")
+                        specs = " ".join(specs_parts)
+
+                        writer.writerow([
+                            qty,
+                            it.get("model", ""),
+                            it.get("package", ""),
+                            it.get("lcsc_id", ""),
+                            specs,
+                            it.get("item_note", ""),
+                            price if price else "",
+                            f"{sub:.4f}" if sub else "",
+                            it.get("buy_link", ""),
+                            it.get("status", ""),
+                        ])
+                    # 合计行
+                    writer.writerow([])
+                    writer.writerow(["合计", "", "", "", "", "",
+                                     "", f"{total_cost:.2f}", "", ""])
+                    text = output.getvalue()
+                else:
+                    data = []
+                    for it in items:
+                        data.append({
+                            "quantity": it.get("quantity", 1),
+                            "model": it.get("model", ""),
+                            "package": it.get("package", ""),
+                            "lcsc_id": it.get("lcsc_id", ""),
+                            "voltage": it.get("voltage", ""),
+                            "current": it.get("current", ""),
+                            "power": it.get("power", ""),
+                            "item_note": it.get("item_note", ""),
+                            "current_price": it.get("current_price", 0.0),
+                            "buy_link": it.get("buy_link", ""),
+                            "status": it.get("status", ""),
+                        })
+                    text = json.dumps(data, ensure_ascii=False, indent=2)
+
+                self.clipboard_clear()
+                self.clipboard_append(text)
+                messagebox.showinfo(
+                    "成功",
+                    f"项目「{proj_name}」的 {len(items)} 条元件已复制到剪贴板。\n\n"
+                    "直接粘到 Excel / 记事本即可。"
+                )
+            except Exception as e:
+                log_error(e)
+                messagebox.showerror("导出失败", f"导出项目 BOM 时出错：{e}")
+            return
+
+        # ---------- 全部视图：原有逻辑 ----------
         choice = messagebox.askyesnocancel("导出数据", "选择复制格式：\n是 = CSV\n否 = JSON\n取消 = 返回")
         if choice is None:
             return
@@ -913,6 +1081,322 @@ class TextInputDialog(tk.Toplevel):
             self.destroy()
         except Exception as e:
             messagebox.showerror("保存失败", str(e))
+
+
+# ==================== 粘贴导入对话框（智能识别 BOM / 元件文本） ====================
+class PasteBomDialog(tk.Toplevel):
+    """
+    从剪贴板粘贴内容，直接导入。自动识别两种格式：
+      1) 嘉立创 BOM 表格（Tab 或逗号分隔，含 Comment/Footprint 表头）
+      2) AI 生成的字段文本（用途: xxx / 型号: xxx 格式）
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.result = False
+
+        theme = THEMES[parent.current_theme]
+        self.theme = theme
+        self.configure(bg=theme["bg_main"])
+        self.title("粘贴导入")
+        self.geometry("820x640")
+        self.resizable(True, True)
+
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        style.configure('TLabel', background=theme["bg_main"], foreground=theme["fg_text"])
+        style.configure('TFrame', background=theme["bg_main"])
+        style.configure('TButton', background=theme["bg_button"], foreground=theme["fg_text"],
+                        bordercolor=theme["border"])
+        style.map('TButton',
+                  background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
+                  foreground=[('active', theme["fg_white"])])
+        style.configure('TEntry',
+                        fieldbackground=theme["bg_input"],
+                        foreground=theme["fg_text"],
+                        insertcolor=theme["fg_text"])
+
+        # 顶部说明
+        tip = (
+            "支持两种粘贴格式，自动识别：\n"
+            "  ① 嘉立创 BOM 表格（Tab 或逗号分隔，第一行是表头）\n"
+            "  ② AI 生成的元件字段文本（用途: xxx / 型号: xxx / ...）"
+        )
+        ttk.Label(self, text=tip, justify=tk.LEFT).pack(padx=15, pady=(15, 6), anchor="w")
+
+        # 文本框
+        text_frame = ttk.Frame(self)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(4, 6))
+
+        self.text = tk.Text(
+            text_frame,
+            height=20,
+            bg=theme["bg_input"], fg=theme["fg_text"],
+            insertbackground=theme["fg_text"],
+            wrap="none",
+        )
+        vsb = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.text.yview)
+        hsb = ttk.Scrollbar(text_frame, orient=tk.HORIZONTAL, command=self.text.xview)
+        self.text.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 底部按钮
+        bottom = ttk.Frame(self)
+        bottom.pack(fill=tk.X, padx=15, pady=(4, 15))
+
+        ttk.Button(bottom, text="📋 从剪贴板填充", command=self.fill_from_clipboard).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bottom, text="清空", command=lambda: self.text.delete("1.0", tk.END)).pack(side=tk.LEFT, padx=4)
+
+        ttk.Button(bottom, text="取消", command=self.destroy).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(bottom, text="导入", command=self.do_import).pack(side=tk.RIGHT, padx=4)
+
+        # 首次打开自动从剪贴板预填充
+        self._autofill_from_clipboard()
+
+        self.transient(parent)
+        self.grab_set()
+
+    def _autofill_from_clipboard(self):
+        """打开时尝试用剪贴板内容预填"""
+        try:
+            raw = self.clipboard_get()
+        except Exception:
+            return
+        if raw and raw.strip():
+            self.text.insert("1.0", raw)
+
+    def fill_from_clipboard(self):
+        try:
+            raw = self.clipboard_get()
+        except Exception:
+            messagebox.showwarning("提示", "剪贴板是空的")
+            return
+        if not raw or not raw.strip():
+            messagebox.showwarning("提示", "剪贴板是空的")
+            return
+        self.text.delete("1.0", tk.END)
+        self.text.insert("1.0", raw)
+
+    # ---------------- 自动识别输入类型 ----------------
+    @staticmethod
+    def _detect_kind(raw: str) -> str:
+        """
+        返回 'bom' / 'component' / 'unknown'
+        - 'bom'       : 嘉立创表格
+        - 'component' : 字段文本（用途: xxx）
+        - 'unknown'   : 识别不出
+        """
+        lines = [ln for ln in raw.splitlines() if ln.strip()]
+        if not lines:
+            return 'unknown'
+        first = lines[0]
+
+        # 判定 1：第一行含 Tab 分隔的多个字段 → BOM
+        if '\t' in first:
+            tab_cols = first.split('\t')
+            # 至少 3 列才算表格
+            if len([c for c in tab_cols if c.strip()]) >= 3:
+                return 'bom'
+
+        # 判定 2：第一行含 BOM 特征关键词
+        bom_markers = ("Comment", "Footprint", "Manufacturer", "Supplier",
+                       "Designator", "Quantity",
+                       "注释", "封装", "制造商", "供应商", "立创编号")
+        if sum(1 for k in bom_markers if k in first) >= 2:
+            return 'bom'
+
+        # 判定 3：含"字段名: 值"格式（中文/英文冒号都算）
+        field_markers = ("用途", "通用描述", "型号", "封装", "引脚数",
+                         "电压", "电流", "功率", "关键参数", "特殊注意",
+                         "立创编号", "购买链接", "价格", "供应商", "状态")
+        hit = 0
+        for ln in lines[:20]:
+            for k in field_markers:
+                if ln.strip().startswith(k + ":") or ln.strip().startswith(k + "："):
+                    hit += 1
+                    break
+        if hit >= 2:
+            return 'component'
+
+        return 'unknown'
+
+    # ---------------- 执行导入 ----------------
+    def do_import(self):
+        raw = self.text.get("1.0", tk.END)
+        if not raw or not raw.strip():
+            messagebox.showwarning("提示", "请粘贴内容")
+            return
+
+        kind = self._detect_kind(raw)
+
+        if kind == 'bom':
+            self._import_bom(raw)
+        elif kind == 'component':
+            self._import_components(raw)
+        else:
+            # 识别不出 → 让用户手动选
+            choice = messagebox.askyesnocancel(
+                "无法识别输入格式",
+                "系统无法自动判断你粘的是哪种格式。请手动选择：\n\n"
+                "  是  = 嘉立创 BOM 表格（含表头的 Tab 分隔数据）\n"
+                "  否  = 元件字段文本（用途: xxx 格式）\n"
+                "  取消 = 关闭"
+            )
+            if choice is None:
+                return
+            if choice:
+                self._import_bom(raw)
+            else:
+                self._import_components(raw)
+
+    def _import_bom(self, raw: str):
+        """走 BOM 导入通道"""
+        try:
+            result = component_service.import_bom_from_text(raw)
+        except Exception as e:
+            log_error(e)
+            messagebox.showerror("导入失败", f"解析 BOM 时出错：\n{e}")
+            return
+
+        total = result.get("total", 0)
+        succ = result.get("success", 0)
+        upd = result.get("updated", 0)
+        skip = result.get("skipped", 0)
+        fails = result.get("failures", [])
+
+        lines = [
+            f"识别格式：✅ 嘉立创 BOM 表格",
+            f"总行数：{total}",
+            "",
+            f"✅ 新增：{succ} 条",
+            f"🔄 更新（信息更完整）：{upd} 条",
+            f"⏭ 跳过（重复且不更完整）：{skip} 条",
+        ]
+        if fails:
+            lines.append("")
+            lines.append(f"ℹ 明细（前 30 条，共 {len(fails)}）：")
+            lines.extend(fails[:30])
+            if len(fails) > 30:
+                lines.append(f"... 还有 {len(fails) - 30} 条")
+
+        messagebox.showinfo("导入完成", "\n".join(lines))
+        self.result = True
+        self.destroy()
+
+    def _import_components(self, raw: str):
+        """走元件字段文本导入通道（和「添加元件」的批量逻辑一致）"""
+        cleaned = _strip_ai_wrappers(raw)
+        blocks = [b.strip() for b in cleaned.split('\n\n') if b.strip()]
+        if not blocks:
+            messagebox.showwarning("提示", "没有解析到任何元件")
+            return
+
+        # 解析字段
+        field_map = {
+            "用途": "purpose", "通用描述": "generic_desc", "型号": "model",
+            "封装": "package", "引脚数": "pin_count",
+            "电压": "voltage", "电流": "current", "功率": "power",
+            "关键参数": "key_params",
+            "特殊注意": "pin_notes", "立创编号": "lcsc_id", "购买链接": "buy_link",
+            "价格": "current_price", "供应商": "supplier", "状态": "status"
+        }
+
+        def parse_block(block: str) -> dict:
+            data = {}
+            for line in block.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                elif "：" in line:
+                    key, value = line.split("：", 1)
+                else:
+                    continue
+                key = key.strip()
+                value = value.strip()
+                if key in field_map:
+                    data[field_map[key]] = value
+
+            # 类型转换
+            try:
+                data["pin_count"] = int(data.get("pin_count") or 0)
+            except ValueError:
+                data["pin_count"] = 0
+            try:
+                data["current_price"] = float(data.get("current_price") or 0.0)
+            except ValueError:
+                data["current_price"] = 0.0
+
+            return data
+
+        success = 0
+        updated = 0
+        skipped = 0
+        failures = []
+
+        for i, block in enumerate(blocks, 1):
+            try:
+                data = parse_block(block)
+                if not data.get("purpose") or not data.get("model"):
+                    failures.append(f"第 {i} 个元件缺少「用途」或「型号」")
+                    continue
+
+                lcsc_id = data.get("lcsc_id", "").strip()
+                model = data.get("model", "").strip()
+
+                # 查找是否已存在
+                existing = None
+                if lcsc_id:
+                    existing = component_service.get_component_by_lcsc_id(lcsc_id)
+                if existing is None and model:
+                    existing = component_service.get_component_by_model(model)
+
+                if existing:
+                    # 已存在 → 用新数据里的非空字段覆盖（保留已有非空值）
+                    update_fields = {}
+                    for k, v in data.items():
+                        if k in ("created_at", "updated_at", "price_updated_at", "id"):
+                            continue
+                        if isinstance(v, str):
+                            if v.strip():
+                                update_fields[k] = v
+                        elif isinstance(v, (int, float)):
+                            if v > 0:
+                                update_fields[k] = v
+                    if update_fields:
+                        component_service.update_component(existing.id, **update_fields)
+                        updated += 1
+                    else:
+                        skipped += 1
+                else:
+                    comp = Component(**data)
+                    component_service.add_component(comp)
+                    success += 1
+            except Exception as e:
+                failures.append(f"第 {i} 个元件失败: {e}")
+
+        lines = [
+            f"识别格式：✅ 元件字段文本",
+            f"共 {len(blocks)} 个元件",
+            "",
+            f"✅ 新增：{success} 条",
+            f"🔄 更新（已存在，用新数据覆盖）：{updated} 条",
+            f"⏭ 跳过（已存在且无新数据）：{skipped} 条",
+        ]
+        if failures:
+            lines.append("")
+            lines.append(f"❌ 失败 {len(failures)} 条：")
+            lines.extend(failures[:30])
+            if len(failures) > 30:
+                lines.append(f"... 还有 {len(failures) - 30} 条")
+
+        messagebox.showinfo("导入完成", "\n".join(lines))
+        self.result = True
+        self.destroy()
 
 
 # ==================== 参数匹配对话框 ====================

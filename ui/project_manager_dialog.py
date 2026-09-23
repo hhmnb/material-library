@@ -406,30 +406,33 @@ class RemoveFromProjectDialog(tk.Toplevel):
 
 BATCH_ADD_RULE = """批量加入项目 · 输入规则
 ----------------------------------------
-每行一个元件，可选用量写在后面：
+【格式一】一行一个元件（推荐，可带用量）
     C192893              → 用量默认 1
     SL2.1A   2           → 用量 2
     0.1uF 0603 x3        → 用量 3
     SOP-16 12MHz *2      → 用量 2
     100nF 4个            → 用量 4
 
-匹配顺序：立创编号 → 精确型号 → 通用描述 → 多关键词模糊
-以 # 开头的行是注释，自动忽略。
-空行自动忽略。
+【格式二】AI 生成的元件字段文本（软件会自动识别）
+    用途: 电容
+    通用描述: 100nF
+    型号: CC0603KRX7R9BB104
+    ...
+    （多个元件之间用空行分隔，软件会提取"立创编号/型号/通用描述"作为标识）
 
-示例：
-# --- 拓展坞 ---
-C192893
-SL2.1A   2
-0.1uF 0603 x3
-SOP-16 12MHz
+【匹配顺序】
+    立创编号 → 精确型号 → 通用描述 → 多关键词模糊
+
+以 # 开头的行是注释，自动忽略；空行自动忽略。
 """
 
 
 class BatchAddToProjectDialog(tk.Toplevel):
     """
     批量把元件加入项目（文本导入模式）。
-    用户粘贴或导入一份文本清单，每行一个元件标识 [+ 可选用量]。
+    支持两种输入：
+      ① 简写格式：一行一个元件标识 [+ 可选用量]
+      ② AI 生成的字段文本：多行一块，含"用途: xxx / 型号: xxx / ..."
     """
 
     def __init__(self, parent):
@@ -441,7 +444,8 @@ class BatchAddToProjectDialog(tk.Toplevel):
         self.theme = theme
         self.configure(bg=theme["bg_main"])
         self.title("批量加入项目")
-        self.geometry("740x660")
+        self.geometry("780x720")
+        self.minsize(700, 600)
         self.resizable(True, True)
 
         style = ttk.Style(self)
@@ -461,9 +465,27 @@ class BatchAddToProjectDialog(tk.Toplevel):
                         fieldbackground=theme["bg_input"],
                         foreground=theme["fg_text"])
 
-        # ---------- 顶部：目标项目 + 快捷按钮 ----------
+        # ============ 底部按钮区（先 pack，钉在底部）============
+        bottom = ttk.Frame(self)
+        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(4, 15))
+
+        row1 = ttk.Frame(bottom)
+        row1.pack(fill=tk.X, pady=3)
+        ttk.Label(row1, text="默认备注：").pack(side=tk.LEFT)
+        self.note_var = tk.StringVar()
+        ttk.Entry(row1, textvariable=self.note_var, width=32).pack(side=tk.LEFT, padx=5)
+        ttk.Label(row1, text="（可选，会写入每条关联）").pack(side=tk.LEFT)
+
+        row2 = ttk.Frame(bottom)
+        row2.pack(fill=tk.X, pady=(8, 0))
+        self.status_var = tk.StringVar(value="")
+        ttk.Label(row2, textvariable=self.status_var).pack(side=tk.LEFT)
+        ttk.Button(row2, text="取消", command=self.destroy).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(row2, text="加入", command=self.save).pack(side=tk.RIGHT, padx=4)
+
+        # ============ 顶部：目标项目 ============
         top = ttk.Frame(self)
-        top.pack(fill=tk.X, padx=15, pady=(15, 4))
+        top.pack(side=tk.TOP, fill=tk.X, padx=15, pady=(15, 4))
         ttk.Label(top, text="目标项目：").pack(side=tk.LEFT)
         self.project_var = tk.StringVar()
         try:
@@ -486,12 +508,13 @@ class BatchAddToProjectDialog(tk.Toplevel):
             self,
             text="提示：项目名可直接输入新名字，会自动创建。下方粘贴或导入清单。",
             foreground=theme["fg_text"]
-        ).pack(anchor="w", padx=15, pady=(0, 6))
+        ).pack(side=tk.TOP, anchor="w", padx=15, pady=(0, 6))
 
-        # ---------- 中部：规则说明 ----------
+        # ============ 中部：规则说明 ============
         rule_frame = ttk.Frame(self)
-        rule_frame.pack(fill=tk.X, padx=15, pady=(0, 4))
+        rule_frame.pack(side=tk.TOP, fill=tk.X, padx=15, pady=(0, 4))
         ttk.Label(rule_frame, text="输入格式：", font=("TkDefaultFont", 9, "bold")).pack(anchor="w")
+
         rule_lbl = tk.Label(
             rule_frame,
             text=BATCH_ADD_RULE,
@@ -503,13 +526,13 @@ class BatchAddToProjectDialog(tk.Toplevel):
         )
         rule_lbl.pack(fill=tk.X, pady=(2, 0))
 
-        # ---------- 中部：文本框 ----------
+        # ============ 中部：文本框 ============
         text_frame = ttk.Frame(self)
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(6, 4))
+        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=15, pady=(6, 4))
 
         self.text = tk.Text(
             text_frame,
-            height=14,
+            height=8,
             bg=theme["bg_input"], fg=theme["fg_text"],
             insertbackground=theme["fg_text"],
             wrap="none",
@@ -518,26 +541,6 @@ class BatchAddToProjectDialog(tk.Toplevel):
         self.text.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # ---------- 底部：默认备注 + 按钮 ----------
-        bottom = ttk.Frame(self)
-        bottom.pack(fill=tk.X, padx=15, pady=(4, 15))
-
-        row1 = ttk.Frame(bottom)
-        row1.pack(fill=tk.X, pady=3)
-        ttk.Label(row1, text="默认备注：").pack(side=tk.LEFT)
-        self.note_var = tk.StringVar()
-        ttk.Entry(row1, textvariable=self.note_var, width=32).pack(side=tk.LEFT, padx=5)
-        ttk.Label(row1, text="（可选，会写入每条关联）").pack(side=tk.LEFT)
-
-        row2 = ttk.Frame(bottom)
-        row2.pack(fill=tk.X, pady=(8, 0))
-
-        self.status_var = tk.StringVar(value="")
-        ttk.Label(row2, textvariable=self.status_var).pack(side=tk.LEFT)
-
-        ttk.Button(row2, text="取消", command=self.destroy).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(row2, text="加入", command=self.save).pack(side=tk.RIGHT, padx=4)
 
         self.transient(parent)
         self.grab_set()
@@ -587,14 +590,7 @@ class BatchAddToProjectDialog(tk.Toplevel):
             log_error(e)
             messagebox.showerror("读取失败", str(e))
 
-    # ---------------- AI 提示词（可选附加本地文档） ----------------
     def copy_ai_prompt(self):
-        """
-        三选一：
-          是   → 选本地文档 → 提示词 + 文档内容 一起复制
-          否   → 只复制提示词
-          取消 → 什么都不做
-        """
         prompt = (
             "请帮我整理出一份元件清单，用于导入到元件库项目。\n\n"
             "输出格式要求（每行一个元件，纯文本，不要用 markdown 代码块）：\n"
@@ -608,98 +604,78 @@ class BatchAddToProjectDialog(tk.Toplevel):
             "下面是我的需求：\n"
             "【在此粘贴你要的元件，或描述你的电路】\n"
         )
-
-        choice = messagebox.askyesnocancel(
-            "AI 提示词",
-            "是否要附加一份本地文档？\n\n"
-            "  是  = 选择文档，提示词 + 文档内容一起复制（推荐）\n"
-            "  否  = 只复制提示词（你自己去 AI 那里贴原始信息）\n"
-            "  取消 = 关闭"
-        )
-        if choice is None:
-            return
-
-        filepath = None
-        if choice:
-            filepath = filedialog.askopenfilename(
-                title="选择要附加的文档",
-                filetypes=[
-                    ("文本类文件", "*.txt *.md *.log *.csv *.json *.xml *.yaml *.yml"),
-                    ("所有文件", "*.*"),
-                ],
-            )
-            if not filepath:
-                filepath = None
-
-        # 组装最终文本
-        if filepath:
-            try:
-                with open(filepath, 'rb') as f:
-                    raw = f.read()
-                if raw.startswith(b'\xff\xfe'):
-                    enc = 'utf-16-le'
-                elif raw.startswith(b'\xfe\xff'):
-                    enc = 'utf-16-be'
-                elif raw.startswith(b'\xef\xbb\xbf'):
-                    enc = 'utf-8-sig'
-                else:
-                    try:
-                        raw.decode('utf-8')
-                        enc = 'utf-8'
-                    except UnicodeDecodeError:
-                        enc = 'gbk'
-                content = raw.decode(enc, errors='replace').strip()
-            except Exception as e:
-                log_error(e)
-                messagebox.showerror("读取失败", f"读取文档时出错：\n{e}")
-                return
-
-            final_text = (
-                prompt
-                + "\n"
-                + "=" * 60
-                + "\n【以下是需要处理的原始信息】\n"
-                + "=" * 60
-                + "\n"
-                + content
-                + "\n"
-                + "=" * 60
-                + "\n"
-            )
-        else:
-            final_text = prompt
-
         try:
             self.clipboard_clear()
-            self.clipboard_append(final_text)
-
-            if filepath:
-                fname = os.path.basename(filepath)
-                messagebox.showinfo(
-                    "已复制",
-                    "提示词 + 文档内容已复制到剪贴板。\n\n"
-                    f"文档：{fname}\n"
-                    f"总长度：{len(final_text)} 字符\n\n"
-                    "直接粘到 AI 对话框即可。"
-                )
-            else:
-                messagebox.showinfo(
-                    "已复制",
-                    "AI 提示词已复制到剪贴板。\n\n"
-                    "把它发给 AI，让 AI 按格式输出元件清单，\n"
-                    "然后把清单粘回本窗口的文本框即可。"
-                )
+            self.clipboard_append(prompt)
+            messagebox.showinfo(
+                "AI 提示词已复制",
+                "已复制。把它发给 AI，让 AI 按格式输出元件清单，\n"
+                "然后把清单粘回本窗口的文本框即可。"
+            )
         except Exception as e:
             log_error(e)
             messagebox.showerror("复制失败", str(e))
 
-    # ---------------- 解析 ----------------
+    # ---------------- 解析：自动识别两种格式 ----------------
+    @staticmethod
+    def _looks_like_field_text(raw_text: str) -> bool:
+        """判断是不是 AI 生成的字段文本"""
+        field_names = ("用途", "通用描述", "型号", "封装", "引脚数",
+                       "电压", "电流", "功率", "关键参数", "特殊注意",
+                       "立创编号", "购买链接", "价格", "供应商", "状态")
+        hit = 0
+        for ln in raw_text.splitlines()[:40]:
+            s = ln.strip()
+            for k in field_names:
+                if s.startswith(k + ":") or s.startswith(k + "："):
+                    hit += 1
+                    break
+            if hit >= 3:
+                return True
+        return False
+
+    @staticmethod
+    def _parse_field_blocks(raw_text: str):
+        """
+        解析 AI 字段文本格式，返回 [(identifier, quantity), ...]
+        每块提取：立创编号 > 型号 > 通用描述
+        """
+        blocks = [b.strip() for b in raw_text.split("\n\n") if b.strip()]
+        items = []
+        for block in blocks:
+            data = {}
+            for line in block.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                elif "：" in line:
+                    key, value = line.split("：", 1)
+                else:
+                    continue
+                key = key.strip()
+                value = value.strip()
+                if key and value:
+                    data[key] = value
+
+            ident = ""
+            if data.get("立创编号"):
+                ident = data["立创编号"]
+            elif data.get("型号"):
+                ident = data["型号"]
+            elif data.get("通用描述"):
+                ident = data["通用描述"]
+
+            if ident:
+                # AI 字段文本里没有用量信息，默认 1
+                items.append((ident, 1))
+        return items
+
     @staticmethod
     def _parse_lines(raw_text):
         """
-        逐行解析，返回 [(identifier, quantity), ...]
-        - 忽略空行 / # 注释
-        - 支持数量写法：末尾数字、"x3"、"*3"、"3个"
+        逐行解析（简写格式），返回 [(identifier, quantity), ...]
         """
         import re as _re
         items = []
@@ -713,10 +689,8 @@ class BatchAddToProjectDialog(tk.Toplevel):
             qty = 1
             ident = line
 
-            # x3 / *3 / ×3
             m = _re.search(r'[x*×]\s*(\d+)\s*$', ident)
             if not m:
-                # 3个
                 m = _re.search(r'(\d+)\s*个\s*$', ident)
             if m:
                 try:
@@ -725,7 +699,6 @@ class BatchAddToProjectDialog(tk.Toplevel):
                     qty = 1
                 ident = ident[:m.start()].strip()
             else:
-                # 末尾裸数字（空格 / 逗号分隔）
                 m2 = _re.search(r'(?:[\s,，]+)(\d+)\s*$', ident)
                 if m2:
                     try:
@@ -739,6 +712,13 @@ class BatchAddToProjectDialog(tk.Toplevel):
             items.append((ident, qty))
         return items
 
+    @classmethod
+    def _parse_any(cls, raw_text: str):
+        """统一入口：自动判断格式"""
+        if cls._looks_like_field_text(raw_text):
+            return cls._parse_field_blocks(raw_text), "字段文本"
+        return cls._parse_lines(raw_text), "简写行"
+
     # ---------------- 执行 ----------------
     def save(self):
         name = self.project_var.get().strip()
@@ -751,7 +731,7 @@ class BatchAddToProjectDialog(tk.Toplevel):
             messagebox.showwarning("提示", "请粘贴或导入元件清单")
             return
 
-        items = self._parse_lines(raw_text)
+        items, fmt = self._parse_any(raw_text)
         if not items:
             messagebox.showwarning("提示", "没有解析到任何有效元件")
             return
@@ -780,7 +760,11 @@ class BatchAddToProjectDialog(tk.Toplevel):
                 except Exception as e:
                     failures.append(f"{ident}: {e}")
 
-            msg = f"项目「{name}」：\n\n成功加入 {success} / {total_lines} 个元件"
+            msg = (
+                f"识别格式：{fmt}\n"
+                f"项目「{name}」：\n\n"
+                f"成功加入 {success} / {total_lines} 个元件"
+            )
             if failures:
                 msg += f"\n\n失败 {len(failures)} 条（前 20 条）：\n"
                 msg += "\n".join(failures[:20])

@@ -12,6 +12,18 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _dedup_key(row: dict) -> str:
+    """
+    主页展示时的去重键，只认立创编号。
+    - 有 lcsc_id → 按 lcsc_id 合并（保留最新一条）
+    - 没有 lcsc_id → 用 id 兜底（不合并，各显示各的）
+    """
+    lcsc = (row.get("lcsc_id") or "").strip()
+    if lcsc:
+        return f"lcsc:{lcsc}"
+    return f"id:{row.get('id')}"
+
+
 # ==================== 项目 CRUD ====================
 
 def create_project(name: str, description: str = "") -> int:
@@ -179,8 +191,8 @@ def search_components_in_project(project_id: Optional[int],
                                  keyword: str = "") -> List[Dict[str, Any]]:
     """
     在项目内搜索元件。
-    project_id=None 时返回所有元件（相当于"全部"）。
-    返回统一结构的 dict 列表。
+    - project_id=None：返回所有元件（"全部"视图），按 lcsc_id 去重
+    - project_id 有值：返回该项目下的元件（原样，不去重）
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -238,7 +250,21 @@ def search_components_in_project(project_id: Optional[int],
     rows = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     conn.close()
-    return [dict(zip(columns, row)) for row in rows]
+    result = [dict(zip(columns, row)) for row in rows]
+
+    # 全部视图：按 lcsc_id 去重（保留 ORDER BY id DESC 排在前面的最新一条）
+    if project_id is None:
+        seen = set()
+        deduped = []
+        for r in result:
+            key = _dedup_key(r)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(r)
+        return deduped
+
+    return result
 
 
 def list_projects_of_component(component_id: int) -> List[Dict[str, Any]]:

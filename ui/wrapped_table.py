@@ -77,7 +77,26 @@ class WrappedTable(tk.Frame):
         self.canvas.itemconfigure(self._win_id, width=event.width)
 
     def _on_wheel(self, event):
-        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        delta = int(-event.delta / 120)
+        if delta == 0:
+            return "break"
+
+        # 取当前可视区的比例范围 [first, last]
+        try:
+            first, last = self.canvas.yview()
+        except Exception:
+            return "break"
+
+        # 已经在顶部且继续向上滚 → 拦截
+        if delta < 0 and first <= 0.0:
+            return "break"
+
+        # 已经在底部且继续向下滚 → 拦截
+        if delta > 0 and last >= 1.0:
+            return "break"
+
+        self.canvas.yview_scroll(delta, "units")
+        return "break"  # 阻止事件继续向上传播
 
     def _build_header(self):
         for w in self.header_frame.winfo_children():

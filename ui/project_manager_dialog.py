@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox, filedialog
 
 from services import project_service
 from services import component_service
+from models.component import Component
 from utils.constants import THEMES
 from utils.error_handler import log_error
 
@@ -402,23 +403,27 @@ class RemoveFromProjectDialog(tk.Toplevel):
             messagebox.showerror("失败", f"移除失败：{e}")
 
 
-# ==================== 批量加入项目（文本导入模式）====================
+# ==================== 批量加入项目（支持 AI 字段文本） ====================
 
 BATCH_ADD_RULE = """批量加入项目 · 输入规则
 ----------------------------------------
-【格式一】一行一个元件（推荐，可带用量）
+【格式一】一行一个元件（可带用量）
     C192893              → 用量默认 1
     SL2.1A   2           → 用量 2
     0.1uF 0603 x3        → 用量 3
     SOP-16 12MHz *2      → 用量 2
     100nF 4个            → 用量 4
 
-【格式二】AI 生成的元件字段文本（软件会自动识别）
+【格式二】AI 生成的元件字段文本
     用途: 电容
     通用描述: 100nF
     型号: CC0603KRX7R9BB104
+    封装: C0603
+    引脚数: 2
+    电压: 50V
     ...
-    （多个元件之间用空行分隔，软件会提取"立创编号/型号/通用描述"作为标识）
+    （多个元件之间用空行分隔）
+    → 库里已有就匹配；库里没有会自动新建元件再关联
 
 【匹配顺序】
     立创编号 → 精确型号 → 通用描述 → 多关键词模糊
@@ -429,10 +434,11 @@ BATCH_ADD_RULE = """批量加入项目 · 输入规则
 
 class BatchAddToProjectDialog(tk.Toplevel):
     """
-    批量把元件加入项目（文本导入模式）。
-    支持两种输入：
+    批量把元件加入项目。支持两种输入：
       ① 简写格式：一行一个元件标识 [+ 可选用量]
-      ② AI 生成的字段文本：多行一块，含"用途: xxx / 型号: xxx / ..."
+      ② AI 字段文本：多行一块，含"用途: xxx / 型号: xxx / ..."
+         - 匹配到已有元件 → 直接关联
+         - 匹配不到 → 自动新建元件 → 关联
     """
 
     def __init__(self, parent):
@@ -637,8 +643,9 @@ class BatchAddToProjectDialog(tk.Toplevel):
     @staticmethod
     def _parse_field_blocks(raw_text: str):
         """
-        解析 AI 字段文本格式，返回 [(identifier, quantity), ...]
-        每块提取：立创编号 > 型号 > 通用描述
+        解析 AI 字段文本格式，返回 [(identifier, quantity, full_data), ...]
+        - identifier 优先级：立创编号 > 型号 > 通用描述
+        - full_data 是完整字段 dict（用于自动建元件）
         """
         blocks = [b.strip() for b in raw_text.split("\n\n") if b.strip()]
         items = []
@@ -656,7 +663,7 @@ class BatchAddToProjectDialog(tk.Toplevel):
                     continue
                 key = key.strip()
                 value = value.strip()
-                if key and value:
+                if key:
                     data[key] = value
 
             ident = ""
@@ -667,15 +674,46 @@ class BatchAddToProjectDialog(tk.Toplevel):
             elif data.get("通用描述"):
                 ident = data["通用描述"]
 
-            if ident:
-                # AI 字段文本里没有用量信息，默认 1
-                items.append((ident, 1))
+            if not ident:
+                continue
+
+            # 中文字段名 → Component 字段
+            comp_data = {
+                "purpose":      data.get("用途", ""),
+                "generic_desc": data.get("通用描述", ""),
+                "model":        data.get("型号", ""),
+                "package":      data.get("封装", ""),
+                "pin_count":    0,
+                "key_params":   data.get("关键参数", ""),
+                "pin_notes":    data.get("特殊注意", ""),
+                "voltage":      data.get("电压", ""),
+                "current":      data.get("电流", ""),
+                "power":        data.get("功率", ""),
+                "lcsc_id":      data.get("立创编号", ""),
+                "buy_link":     data.get("购买链接", ""),
+                "current_price": 0.0,
+                "supplier":     data.get("供应商", ""),
+                "status":       data.get("状态", "未验证") or "未验证",
+            }
+            # 类型转换
+            try:
+                pin = data.get("引脚数", "")
+                comp_data["pin_count"] = int(pin) if pin else 0
+            except ValueError:
+                comp_data["pin_count"] = 0
+            try:
+                price = data.get("价格", "")
+                comp_data["current_price"] = float(price) if price else 0.0
+            except ValueError:
+                comp_data["current_price"] = 0.0
+
+            items.append((ident, 1, comp_data))
         return items
 
     @staticmethod
     def _parse_lines(raw_text):
         """
-        逐行解析（简写格式），返回 [(identifier, quantity), ...]
+        逐行解析（简写格式），返回 [(identifier, quantity, None), ...]
         """
         import re as _re
         items = []
@@ -709,7 +747,7 @@ class BatchAddToProjectDialog(tk.Toplevel):
 
             if not ident:
                 continue
-            items.append((ident, qty))
+            items.append((ident, qty, None))
         return items
 
     @classmethod
@@ -745,33 +783,64 @@ class BatchAddToProjectDialog(tk.Toplevel):
             else:
                 pid = proj["id"]
 
-            success = 0
+            matched = 0
+            created = 0
+            failed = 0
             failures = []
-            total_lines = len(items)
+            total = len(items)
 
-            for ident, qty in items:
-                comp = component_service.find_component_by_identifier(ident)
-                if comp is None:
-                    failures.append(f"未匹配到：{ident}")
-                    continue
+            for ident, qty, comp_data in items:
                 try:
-                    project_service.add_component_to_project(pid, comp.id, qty, note)
-                    success += 1
+                    # 1. 尝试匹配库里已有元件
+                    comp = component_service.find_component_by_identifier(ident)
+
+                    # 2. 没匹配到 + 有完整字段信息 → 自动新建元件
+                    if comp is None and comp_data:
+                        if comp_data.get("model") or comp_data.get("lcsc_id"):
+                            new_comp = Component(**comp_data)
+                            new_id = component_service.add_component(new_comp)
+                            comp = component_service.get_component_by_id(new_id)
+                            if comp:
+                                created += 1
+                        else:
+                            failures.append(f"信息不足无法新建：{ident}")
+                            failed += 1
+                            continue
+                    elif comp is None:
+                        failures.append(f"未匹配到：{ident}")
+                        failed += 1
+                        continue
+                    else:
+                        matched += 1
+
+                    # 3. 关联到项目
+                    if comp is not None:
+                        project_service.add_component_to_project(pid, comp.id, qty, note)
+
                 except Exception as e:
                     failures.append(f"{ident}: {e}")
+                    failed += 1
 
-            msg = (
-                f"识别格式：{fmt}\n"
-                f"项目「{name}」：\n\n"
-                f"成功加入 {success} / {total_lines} 个元件"
-            )
+            msg_lines = [
+                f"识别格式：{fmt}",
+                f"项目「{name}」：",
+                "",
+                f"✅ 匹配已有元件：{matched} 个",
+                f"➕ 自动新建元件：{created} 个",
+            ]
+            if failed:
+                msg_lines.append(f"❌ 失败：{failed} 个")
+            msg_lines.append("")
+            msg_lines.append(f"成功加入 {matched + created} / {total} 个元件")
+
             if failures:
-                msg += f"\n\n失败 {len(failures)} 条（前 20 条）：\n"
-                msg += "\n".join(failures[:20])
+                msg_lines.append("")
+                msg_lines.append(f"失败明细（前 20 条，共 {len(failures)}）：")
+                msg_lines.extend(failures[:20])
                 if len(failures) > 20:
-                    msg += f"\n... 还有 {len(failures) - 20} 条"
+                    msg_lines.append(f"... 还有 {len(failures) - 20} 条")
 
-            messagebox.showinfo("批量加入完成", msg)
+            messagebox.showinfo("批量加入完成", "\n".join(msg_lines))
             self.result = True
             self.destroy()
         except Exception as e:

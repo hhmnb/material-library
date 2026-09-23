@@ -46,11 +46,43 @@ def _strip_ai_wrappers(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def make_button(parent, text, command, theme):
+    """用原生 tk.Button 创建一个完全受控的按钮（避免 ttk 主题发白）"""
+    return tk.Button(
+        parent, text=text, command=command,
+        bg=theme["bg_button"],
+        fg=theme["fg_text"],
+        activebackground=theme["bg_button_hover"],
+        activeforeground=theme["fg_white"],
+        relief=tk.FLAT,
+        bd=1,
+        highlightthickness=0,
+        padx=10, pady=4,
+        cursor="hand2",
+    )
+
+
+def recolor_buttons(widget, theme):
+    """递归遍历所有子控件，把 tk.Button 重新着色（主题切换时调用）"""
+    for child in widget.winfo_children():
+        if isinstance(child, tk.Button):
+            try:
+                child.configure(
+                    bg=theme["bg_button"],
+                    fg=theme["fg_text"],
+                    activebackground=theme["bg_button_hover"],
+                    activeforeground=theme["fg_white"],
+                )
+            except Exception:
+                pass
+        recolor_buttons(child, theme)
+
+
 class MainWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("精料库 - 元件库管理系统")
-        self.geometry("1360x560")
+        self.geometry("1360x600")
         self.minsize(1000, 400)
 
         self.current_theme = DEFAULT_THEME
@@ -78,8 +110,8 @@ class MainWindow(tk.Tk):
         search_entry.pack(side=tk.LEFT, padx=5)
         search_entry.bind("<Return>", lambda e: self.refresh_table())
 
-        ttk.Button(search_frame, text="查询", command=self.refresh_table).pack(side=tk.LEFT, padx=3)
-        ttk.Button(search_frame, text="显示全部", command=self.show_all).pack(side=tk.LEFT, padx=3)
+        make_button(search_frame, "查询", self.refresh_table, THEMES[self.current_theme]).pack(side=tk.LEFT, padx=3)
+        make_button(search_frame, "显示全部", self.show_all, THEMES[self.current_theme]).pack(side=tk.LEFT, padx=3)
 
         # 项目筛选（可手输模糊匹配）
         ttk.Label(search_frame, text="项目：").pack(side=tk.LEFT, padx=(15, 3))
@@ -93,9 +125,7 @@ class MainWindow(tk.Tk):
         self.project_combo.bind("<Return>", lambda e: self.refresh_table())
         self.project_combo.bind("<KeyRelease>", self._on_project_keyrelease)
 
-        ttk.Button(search_frame, text="管理项目", command=self.open_project_manager).pack(
-            side=tk.LEFT, padx=3
-        )
+        make_button(search_frame, "管理项目", self.open_project_manager, THEMES[self.current_theme]).pack(side=tk.LEFT, padx=3)
 
         # 主题切换
         ttk.Label(search_frame, text="主题：").pack(side=tk.LEFT, padx=(15, 3))
@@ -142,19 +172,20 @@ class MainWindow(tk.Tk):
         button_frame = ttk.Frame(self.main_view)
         button_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
 
-        ttk.Button(button_frame, text="添加元件", command=self.add_component).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="编辑选中", command=self.edit_component).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="删除选中", command=self.delete_component).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="封装速查", command=self.open_footprint_search).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="参数匹配", command=self.open_match_dialog).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="批量更新价格", command=self.open_batch_price_dialog).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="批量加入项目", command=self.batch_add_to_project).pack(side=tk.LEFT, padx=5)
-        # 导出数据按钮：保存引用，方便动态改文字
-        self._btn_export = ttk.Button(button_frame, text="导出数据", command=self.export_data)
-        self._btn_export.pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="AI 提示词", command=self.copy_ai_prompt).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="价格校准", command=self.show_price_outdated).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="刷新", command=self.refresh_table).pack(side=tk.LEFT, padx=5)
+        th = THEMES[self.current_theme]
+
+        make_button(button_frame, "添加元件", self.add_component, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "编辑选中", self.edit_component, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "删除选中", self.delete_component, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "封装速查", self.open_footprint_search, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "参数匹配", self.open_match_dialog, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "批量更新价格", self.open_batch_price_dialog, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "批量加入项目", self.batch_add_to_project, th).pack(side=tk.LEFT, padx=4)
+        self._btn_export = make_button(button_frame, "导出数据", self.export_data, th)
+        self._btn_export.pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "AI 提示词", self.copy_ai_prompt, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "价格校准", self.show_price_outdated, th).pack(side=tk.LEFT, padx=4)
+        make_button(button_frame, "刷新", self.refresh_table, th).pack(side=tk.LEFT, padx=4)
 
         # 初始化项目下拉
         self.refresh_project_combo()
@@ -407,19 +438,23 @@ class MainWindow(tk.Tk):
         self.configure(bg=theme["bg_main"])
         self.style.configure('TLabel', background=theme["bg_main"], foreground=theme["fg_text"])
         self.style.configure('TFrame', background=theme["bg_main"])
-        self.style.configure('TButton', background=theme["bg_button"], foreground=theme["fg_text"],
-                             bordercolor=theme["border"])
-        self.style.map('TButton',
-                       background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
-                       foreground=[('active', theme["fg_white"])])
+
+        # ===== ttk 控件的样式（下拉框、输入框等仍用 ttk）=====
         self.style.configure('TEntry',
                              fieldbackground=theme["bg_input"],
                              foreground=theme["fg_text"],
-                             insertcolor=theme["fg_text"])
+                             insertcolor=theme["fg_text"],
+                             lightcolor=theme["bg_input"],
+                             darkcolor=theme["bg_input"],
+                             bordercolor=theme["border"])
         self.style.configure('TCombobox',
                              fieldbackground=theme["bg_input"],
                              foreground=theme["fg_text"],
-                             background=theme["bg_button"])
+                             background=theme["bg_button"],
+                             arrowcolor=theme["fg_text"],
+                             lightcolor=theme["bg_button"],
+                             darkcolor=theme["bg_button"],
+                             bordercolor=theme["border"])
 
         # 封装速查页仍在用 Treeview
         self.style.configure('Treeview',
@@ -437,10 +472,14 @@ class MainWindow(tk.Tk):
                        background=[('selected', theme["bg_select"])],
                        foreground=[('selected', theme["fg_white"])])
 
+        # 主表（WrappedTable）主题刷新
         if hasattr(self, "tbl") and self.tbl is not None:
             self.tbl.update_theme(theme)
 
         self._apply_treeview_zebra(theme)
+
+        # 递归把所有 tk.Button 重新着色
+        recolor_buttons(self, theme)
 
         self.refresh_table()
 
@@ -558,8 +597,18 @@ class MainWindow(tk.Tk):
                 {"key": "buy_link",      "text": "购买链接", "width": 180},
             ]
 
-        self.tbl.set_columns(columns)
-        self.tbl.set_data(self._components_to_rows(data))
+        try:
+            self.tbl.set_columns(columns)
+        except Exception as e:
+            log_error(e)
+            return
+
+        try:
+            self.tbl.set_data(self._components_to_rows(data))
+        except Exception as e:
+            log_error(e)
+            return
+
         self.refresh_project_combo()
 
         # 更新"导出数据"按钮文字
@@ -821,15 +870,11 @@ class SimpleInputDialog(tk.Toplevel):
         style = ttk.Style(self)
         style.theme_use('clam')
         style.configure('TLabel', background=theme["bg_main"], foreground=theme["fg_text"])
-        style.configure('TButton', background=theme["bg_button"], foreground=theme["fg_text"],
-                        bordercolor=theme["border"])
-        style.map('TButton',
-                  background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
-                  foreground=[('active', theme["fg_white"])])
         style.configure('TEntry',
                         fieldbackground=theme["bg_input"],
                         foreground=theme["fg_text"],
-                        insertcolor=theme["fg_text"])
+                        insertcolor=theme["fg_text"],
+                        lightcolor=theme["bg_input"], darkcolor=theme["bg_input"])
 
         if prompt:
             ttk.Label(self, text=prompt, justify=tk.LEFT).pack(padx=10, pady=(10, 5))
@@ -841,8 +886,8 @@ class SimpleInputDialog(tk.Toplevel):
 
         btn_frame = ttk.Frame(self)
         btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text="确定", command=self._on_ok).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="取消", command=self._on_cancel).pack(side=tk.LEFT, padx=5)
+        make_button(btn_frame, "确定", self._on_ok, theme).pack(side=tk.LEFT, padx=5)
+        make_button(btn_frame, "取消", self._on_cancel, theme).pack(side=tk.LEFT, padx=5)
 
         self.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
@@ -878,15 +923,11 @@ class TextInputDialog(tk.Toplevel):
         style.theme_use('clam')
         style.configure('TLabel', background=theme["bg_main"], foreground=theme["fg_text"])
         style.configure('TFrame', background=theme["bg_main"])
-        style.configure('TButton', background=theme["bg_button"], foreground=theme["fg_text"],
-                        bordercolor=theme["border"])
-        style.map('TButton',
-                  background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
-                  foreground=[('active', theme["fg_white"])])
         style.configure('TEntry',
                         fieldbackground=theme["bg_input"],
                         foreground=theme["fg_text"],
-                        insertcolor=theme["fg_text"])
+                        insertcolor=theme["fg_text"],
+                        lightcolor=theme["bg_input"], darkcolor=theme["bg_input"])
 
         self.info_text = """元件输入格式（每行一项，用中文冒号分隔）：
 用途: 例如 USB Hub 主控
@@ -921,10 +962,10 @@ class TextInputDialog(tk.Toplevel):
         inner_btn_frame.pack(anchor='center')
 
         save_text = "保存修改" if component else "添加元件"
-        ttk.Button(inner_btn_frame, text=save_text, command=self.save).pack(side=tk.LEFT, padx=5)
-        ttk.Button(inner_btn_frame, text="📋 从剪贴板填充", command=self.fill_from_clipboard).pack(side=tk.LEFT, padx=5)
-        ttk.Button(inner_btn_frame, text="导出规则", command=self.export_rule).pack(side=tk.LEFT, padx=5)
-        ttk.Button(inner_btn_frame, text="取消", command=self.destroy).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, save_text, self.save, theme).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, "📋 从剪贴板填充", self.fill_from_clipboard, theme).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, "导出规则", self.export_rule, theme).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, "取消", self.destroy, theme).pack(side=tk.LEFT, padx=5)
 
         if component:
             data = component.to_dict()
@@ -1107,15 +1148,11 @@ class PasteBomDialog(tk.Toplevel):
         style.theme_use('clam')
         style.configure('TLabel', background=theme["bg_main"], foreground=theme["fg_text"])
         style.configure('TFrame', background=theme["bg_main"])
-        style.configure('TButton', background=theme["bg_button"], foreground=theme["fg_text"],
-                        bordercolor=theme["border"])
-        style.map('TButton',
-                  background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
-                  foreground=[('active', theme["fg_white"])])
         style.configure('TEntry',
                         fieldbackground=theme["bg_input"],
                         foreground=theme["fg_text"],
-                        insertcolor=theme["fg_text"])
+                        insertcolor=theme["fg_text"],
+                        lightcolor=theme["bg_input"], darkcolor=theme["bg_input"])
 
         # 顶部说明
         tip = (
@@ -1147,11 +1184,11 @@ class PasteBomDialog(tk.Toplevel):
         bottom = ttk.Frame(self)
         bottom.pack(fill=tk.X, padx=15, pady=(4, 15))
 
-        ttk.Button(bottom, text="📋 从剪贴板填充", command=self.fill_from_clipboard).pack(side=tk.LEFT, padx=4)
-        ttk.Button(bottom, text="清空", command=lambda: self.text.delete("1.0", tk.END)).pack(side=tk.LEFT, padx=4)
+        make_button(bottom, "📋 从剪贴板填充", self.fill_from_clipboard, theme).pack(side=tk.LEFT, padx=4)
+        make_button(bottom, "清空", lambda: self.text.delete("1.0", tk.END), theme).pack(side=tk.LEFT, padx=4)
 
-        ttk.Button(bottom, text="取消", command=self.destroy).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(bottom, text="导入", command=self.do_import).pack(side=tk.RIGHT, padx=4)
+        make_button(bottom, "取消", self.destroy, theme).pack(side=tk.RIGHT, padx=4)
+        make_button(bottom, "导入", self.do_import, theme).pack(side=tk.RIGHT, padx=4)
 
         # 首次打开自动从剪贴板预填充
         self._autofill_from_clipboard()
@@ -1414,15 +1451,11 @@ class MatchDialog(tk.Toplevel):
         style.theme_use('clam')
         style.configure('TLabel', background=theme["bg_main"], foreground=theme["fg_text"])
         style.configure('TFrame', background=theme["bg_main"])
-        style.configure('TButton', background=theme["bg_button"], foreground=theme["fg_text"],
-                        bordercolor=theme["border"])
-        style.map('TButton',
-                  background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
-                  foreground=[('active', theme["fg_white"])])
         style.configure('TEntry',
                         fieldbackground=theme["bg_input"],
                         foreground=theme["fg_text"],
-                        insertcolor=theme["fg_text"])
+                        insertcolor=theme["fg_text"],
+                        lightcolor=theme["bg_input"], darkcolor=theme["bg_input"])
 
         self.rule_text = """参数匹配输入规则：
 支持批量输入多个硬件描述，每行一个硬件。
@@ -1448,10 +1481,10 @@ SOP-16 12MHz
         button_frame.pack(fill=tk.X, padx=10, pady=10)
         inner_btn_frame = ttk.Frame(button_frame)
         inner_btn_frame.pack(anchor='center')
-        ttk.Button(inner_btn_frame, text="执行匹配", command=self.execute_match).pack(side=tk.LEFT, padx=5)
-        ttk.Button(inner_btn_frame, text="导出结果", command=self.export_results).pack(side=tk.LEFT, padx=5)
-        ttk.Button(inner_btn_frame, text="导出规则", command=self.export_rule).pack(side=tk.LEFT, padx=5)
-        ttk.Button(inner_btn_frame, text="关闭", command=self.destroy).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, "执行匹配", self.execute_match, theme).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, "导出结果", self.export_results, theme).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, "导出规则", self.export_rule, theme).pack(side=tk.LEFT, padx=5)
+        make_button(inner_btn_frame, "关闭", self.destroy, theme).pack(side=tk.LEFT, padx=5)
 
         self.matched_components = []
 
@@ -1519,15 +1552,11 @@ class BatchPriceDialog(tk.Toplevel):
         style.theme_use('clam')
         style.configure('TLabel', background=theme["bg_main"], foreground=theme["fg_text"])
         style.configure('TFrame', background=theme["bg_main"])
-        style.configure('TButton', background=theme["bg_button"], foreground=theme["fg_text"],
-                        bordercolor=theme["border"])
-        style.map('TButton',
-                  background=[('active', theme["bg_button_hover"]), ('pressed', theme["bg_main"])],
-                  foreground=[('active', theme["fg_white"])])
         style.configure('TEntry',
                         fieldbackground=theme["bg_input"],
                         foreground=theme["fg_text"],
-                        insertcolor=theme["fg_text"])
+                        insertcolor=theme["fg_text"],
+                        lightcolor=theme["bg_input"], darkcolor=theme["bg_input"])
 
         rule_text = """批量更新价格输入规则：
 每行一个元件，格式为：元件标识 价格
@@ -1556,8 +1585,8 @@ SL2.1A 2.3
 
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
-        ttk.Button(btn_frame, text="执行更新", command=self.execute).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="关闭", command=self.destroy).pack(side=tk.LEFT, padx=5)
+        make_button(btn_frame, "执行更新", self.execute, theme).pack(side=tk.LEFT, padx=5)
+        make_button(btn_frame, "关闭", self.destroy, theme).pack(side=tk.LEFT, padx=5)
 
     def execute(self):
         raw_text = self.text.get("1.0", tk.END).strip()
